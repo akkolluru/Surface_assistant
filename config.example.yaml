@@ -1,0 +1,48 @@
+# Copy to config.yaml (gitignored) to customize Surface Assistant settings.
+
+display:
+  clock_format: "12h"
+  temperature_unit: "C"
+  wallpaper_interval_seconds: 180
+  night_mode:
+    enter_lux: 5
+    exit_lux: 15
+    enter_debounce_seconds: 10
+    exit_debounce_seconds: 5
+    min_backlight_percent: 3
+    pause_during_video: true
+
+voice:
+  wake_word: "hey_jarvis"
+  whisper_model: "base.en"
+  whisper_compute_type: "int8"
+
+audio:
+  defaults:
+    alarm_sink_percent: 100
+    tts_sink_percent: 50
+    media_sink_percent: 60
+
+launcher:
+  browser_bin: "brave-browser"
+  tiles:
+    - id: "youtube"
+      label: "YouTube"
+      kind: "browser_app"
+      target: "https://www.youtube.com"
+    - id: "netflix"
+      label: "Netflix"
+      kind: "browser_app"
+      target: "https://www.netflix.com"
+    - id: "prime"
+      label: "Prime Video"
+      kind: "browser_app"
+      target: "https://www.primevideo.com"
+    - id: "anime"
+      label: "Anime"
+      kind: "browser_app"
+      target: "${ANIME_PORTAL_URL}"
+    - id: "stremio"
+      label: "Stremio"
+      kind: "native_app"
+      target: "stremio"

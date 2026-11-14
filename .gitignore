@@ -1,0 +1,38 @@
+# Secrets & local runtime config
+.env
+.env.*
+!.env.example
+config.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Docker & Home Assistant runtime data
+homeassistant/data/
+homeassistant/.storage/
+homeassistant/home-assistant_v2.db*
+homeassistant/home-assistant.log*
+whisper-data/
+piper-data/
+openwakeword-data/
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
