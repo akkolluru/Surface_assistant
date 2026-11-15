@@ -1,0 +1,2 @@
+# Allow members of the 'video' group to adjust display backlight brightness without root.
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"

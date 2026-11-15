@@ -1,0 +1,15 @@
+[Unit]
+Description=Surface Assistant Hardware & Kiosk Companion Daemon
+After=graphical-session.target pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Surface_assistant
+EnvironmentFile=-%h/Surface_assistant/.env
+ExecStart=%h/.local/share/surface-assistant/daemon-venv/bin/uvicorn daemon.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Surface Assistant Wyoming Voice Satellite (PipeWire)
+After=pipewire-pulse.service surface-daemon.service
+Requires=pipewire-pulse.service
+
+[Service]
+Type=simple
+Environment=PULSE_SINK=tts-sink
+ExecStart=%h/.local/share/surface-assistant/wyoming-venv/bin/wyoming-satellite \
+  --name "Surface Bedside Hub" \
+  --uri tcp://0.0.0.0:10700 \
+  --mic-command "parec --rate=16000 --channels=1 --format=s16le --raw" \
+  --snd-command "pacat --rate=22050 --channels=1 --format=s16le --raw --device=tts-sink" \
+  --wake-uri tcp://127.0.0.1:10400 \
+  --wake-word-name hey_jarvis
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

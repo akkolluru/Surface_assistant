@@ -1,0 +1,47 @@
+# Sway (Wayland) Kiosk Configuration for Microsoft Surface Pro 5
+
+set $mod Mod4
+set $scripts ~/.local/share/surface-assistant/scripts
+
+# Display & Touch
+output * scale 1.75
+input type:touch map_to_output *
+seat * hide_cursor 3000
+
+# Keep display awake (Smart Night Mode handles dark-room dimming via backlight)
+exec swayidle -w \
+  timeout 86400 'true'
+
+# Clean borderless kiosk aesthetic
+default_border none
+default_floating_border none
+gaps inner 0
+gaps outer 0
+xwayland enable
+
+# Assign Kiosk Hub to Workspace 1 and Video Apps to Workspace 2
+assign [app_id="surface-kiosk"] workspace "1:hub"
+for_window [app_id="surface-kiosk"] fullscreen enable
+for_window [class="Stremio"] move to workspace "2:media", fullscreen enable
+for_window [app_id="stremio"] move to workspace "2:media", fullscreen enable
+
+# Physical Surface Pro 5 top-edge volume rocker keys
+bindsym XF86AudioRaiseVolume exec $scripts/volume-rocker.sh up
+bindsym XF86AudioLowerVolume exec $scripts/volume-rocker.sh down
+bindsym XF86AudioMute exec $scripts/volume-rocker.sh mute
+
+# Emergency keyboard shortcuts (when a keyboard is attached for maintenance)
+bindsym $mod+Return exec foot || x-terminal-emulator
+bindsym $mod+Shift+r reload
+bindsym $mod+Shift+e exit
+bindsym $mod+1 workspace "1:hub"
+bindsym $mod+2 workspace "2:media"
+
+# Startup session services
+exec $scripts/../pipewire-rules/init-sinks.sh
+exec swayosd-server
+exec waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css
+exec kdeconnect-indicator
+
+# Launch Brave Kiosk on Workspace 1 once daemon is listening on 127.0.0.1:8000
+exec sh -c 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=wayland --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
