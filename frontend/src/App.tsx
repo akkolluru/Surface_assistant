@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AmbientHubPane } from "./components/AmbientHubPane";
 import { MediaLauncher } from "./components/MediaLauncher";
+import { SimulatorConsole } from "./components/SimulatorConsole";
 import { SmartHomePane } from "./components/SmartHomePane";
 import { VolumeOSD } from "./components/VolumeOSD";
 import {
@@ -18,6 +19,14 @@ const PANE_TITLES = [
 ] as const;
 
 export function App() {
+  if (typeof window !== "undefined" && window.location.pathname === "/sim") {
+    return <SimulatorConsole />;
+  }
+
+  return <KioskHub />;
+}
+
+function KioskHub() {
   const [daemonState, setDaemonState] = useState<DaemonStateSnapshot>(DEFAULT_DAEMON_SNAPSHOT);
   const [haEntities, setHaEntities] = useState<Record<string, SmartEntityState>>(
     PLACEHOLDER_HA_ENTITIES

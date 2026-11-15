@@ -79,6 +79,24 @@ export const daemonApi = {
     channel: AudioChannel,
     payload: { percent?: number; muted?: boolean }
   ): Promise<AudioState> => postJson<AudioState>("/api/audio/level", { channel, ...payload }),
+  pressRocker: (action: "up" | "down" | "mute"): Promise<AudioState> =>
+    postJson<AudioState>("/api/audio/rocker", { action }),
+  queryKnowledge: (query: string): Promise<{ source: string; answer: string | null }> =>
+    postJson<{ source: string; answer: string | null }>("/api/knowledge/query", { query }),
+  sendMockSms: (recipient: string, message: string): Promise<{ ok: boolean; detail: string }> =>
+    postJson<{ ok: boolean; detail: string }>("/api/kde/sms", { recipient, message }),
+  replyMockWhatsApp: (sender: string, message: string): Promise<{ ok: boolean; detail: string }> =>
+    postJson<{ ok: boolean; detail: string }>("/api/kde/reply", { sender, message }),
+  setSimLux: (lux: number, instant = true): Promise<NightModeState> =>
+    postJson<NightModeState>("/api/sim/lux", { lux, instant }),
+  expireSleepTimer: (): Promise<DaemonStateSnapshot> =>
+    postJson<DaemonStateSnapshot>("/api/sim/sleep-expire"),
+  updateSimDevice: (payload: {
+    id: string;
+    battery_percent?: number;
+    charging?: boolean;
+    reachable?: boolean;
+  }): Promise<unknown> => postJson("/api/sim/device", payload),
 };
 
 export interface DaemonSocketHandlers {
