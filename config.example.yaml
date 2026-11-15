@@ -46,3 +46,6 @@ launcher:
       label: "Stremio"
       kind: "native_app"
       target: "stremio"
+
+kde_connect:
+  primary_phone_name: "${PRIMARY_PHONE_NAME}"

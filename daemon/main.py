@@ -129,7 +129,9 @@ def build_runtime(config: AppConfig | None = None) -> DaemonRuntime:
         ambient_backend = LinuxAmbientBackend()
         audio_backend = PipeWireAudioBackend(cfg.yaml_cfg.audio_defaults)
         compositor_backend = SwayCompositorBackend()
-        kde_backend = KdeConnectCliBackend()
+        kde_backend = KdeConnectCliBackend(
+            primary_phone_name=cfg.yaml_cfg.kde_connect.primary_phone_name
+        )
     else:
         ambient_backend = MockAmbientBackend()
         audio_backend = MockAudioBackend(cfg.yaml_cfg.audio_defaults)

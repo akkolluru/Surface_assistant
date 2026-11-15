@@ -99,6 +99,10 @@ class MockKdeBackend:
 class KdeConnectCliBackend:
     """Linux KDE Connect integration via kdeconnect-cli and gdbus."""
 
+    def __init__(self, primary_phone_name: str | None = None) -> None:
+        stripped = primary_phone_name.strip() if primary_phone_name is not None else ""
+        self._primary_phone_name: str | None = stripped or None
+
     @staticmethod
     def _infer_device_kind(name: str) -> DeviceKind:
         lowered = name.lower()
@@ -188,10 +192,22 @@ class KdeConnectCliBackend:
         return devices
 
     def _find_phone_id(self) -> str | None:
-        for dev in self.list_devices():
-            if dev.reachable and dev.device_type == "phone":
-                return dev.id
-        return None
+        phones = [
+            dev
+            for dev in self.list_devices()
+            if dev.reachable and dev.device_type == "phone"
+        ]
+        if not phones:
+            return None
+        if self._primary_phone_name is not None:
+            target = self._primary_phone_name.casefold()
+            for dev in phones:
+                if dev.name.strip().casefold() == target:
+                    return dev.id
+            for dev in phones:
+                if target in dev.name.casefold():
+                    return dev.id
+        return phones[0].id
 
     def send_sms(self, recipient: str, message: str) -> tuple[bool, str]:
         phone_id = self._find_phone_id()

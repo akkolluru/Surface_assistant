@@ -46,10 +46,15 @@ class LauncherConfig(BaseModel):
     tiles: list[MediaTileConfig] = Field(default_factory=list)
 
 
+class KdeConnectConfig(BaseModel):
+    primary_phone_name: str = "Google Pixel 10 Pro"
+
+
 class AppYamlConfig(BaseModel):
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     audio_defaults: AudioDefaultsConfig = Field(default_factory=AudioDefaultsConfig)
     launcher: LauncherConfig = Field(default_factory=LauncherConfig)
+    kde_connect: KdeConnectConfig = Field(default_factory=KdeConnectConfig)
 
 
 class EnvSettings(BaseSettings):
@@ -69,6 +74,7 @@ class EnvSettings(BaseSettings):
     weather_timezone: str = "Asia/Kolkata"
     wallpapers_dir: str = "~/wallpapers"
     anime_portal_url: str = "https://example.com"
+    primary_phone_name: str = "Google Pixel 10 Pro"
 
 
 class AppConfig(BaseModel):
@@ -95,6 +101,7 @@ def load_config(
     env = env_settings or EnvSettings()
     env_map = {
         "ANIME_PORTAL_URL": env.anime_portal_url,
+        "PRIMARY_PHONE_NAME": env.primary_phone_name,
         "WALLPAPERS_DIR": env.wallpapers_dir,
     }
 
