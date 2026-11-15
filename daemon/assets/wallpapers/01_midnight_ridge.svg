@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1026"/>
+      <stop offset="55%" stop-color="#1b264f"/>
+      <stop offset="100%" stop-color="#2e1f47"/>
+    </linearGradient>
+    <radialGradient id="moonGlow" cx="72%" cy="28%" r="35%">
+      <stop offset="0%" stop-color="#ffd59e" stop-opacity="0.45"/>
+      <stop offset="60%" stop-color="#7c5cff" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#0b1026" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <rect width="1920" height="1080" fill="url(#moonGlow)"/>
+  <circle cx="1380" cy="290" r="46" fill="#ffe7c2" opacity="0.9"/>
+  <path d="M0 780 Q 320 690 680 760 T 1380 720 T 1920 790 L 1920 1080 L 0 1080 Z" fill="#141830" opacity="0.85"/>
+  <path d="M0 860 Q 480 800 960 870 T 1920 840 L 1920 1080 L 0 1080 Z" fill="#0b0d1a"/>
+</svg>
