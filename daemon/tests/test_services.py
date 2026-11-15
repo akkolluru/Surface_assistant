@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -10,7 +13,11 @@ import pytest
 from daemon.ambient_light import AmbientNightModeController, MockAmbientBackend
 from daemon.config import NightModeConfig
 from daemon.knowledge import KnowledgeService
-from daemon.media_launcher import MediaService, MockCompositorBackend
+from daemon.media_launcher import (
+    MediaService,
+    MockCompositorBackend,
+    SwayCompositorBackend,
+)
 from daemon.models import MediaTileConfig
 from daemon.wallpapers import WallpaperService
 
@@ -122,3 +129,127 @@ async def test_knowledge_service_weather_and_wikipedia_fallback() -> None:
         ans = await svc.answer_query("Tell me about Hyderabad")
         assert ans.source == "wikipedia"
         assert ans.answer == "Hyderabad is the capital of Telangana. It is a major tech hub."
+
+
+def test_sway_backend_discovers_sockets_from_runtime_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SWAYSOCK", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    old_sock = tmp_path / "sway-ipc.1000.100.sock"
+    new_sock = tmp_path / "sway-ipc.1000.200.sock"
+    old_sock.touch()
+    new_sock.touch()
+    os.utime(old_sock, (1000, 1000))
+    os.utime(new_sock, (2000, 2000))
+
+    wayland_sock = tmp_path / "wayland-1"
+    wayland_lock = tmp_path / "wayland-1.lock"
+    wayland_sock.touch()
+    wayland_lock.touch()
+    os.utime(wayland_sock, (1000, 1000))
+    os.utime(wayland_lock, (3000, 3000))
+
+    backend = SwayCompositorBackend(runtime_dir=tmp_path)
+    env = backend._build_env()
+
+    assert env["SWAYSOCK"] == str(new_sock)
+    assert env["WAYLAND_DISPLAY"] == "wayland-1"
+
+    # Stale/non-existent SWAYSOCK falls back to discovered socket
+    monkeypatch.setenv("SWAYSOCK", str(tmp_path / "missing.sock"))
+    assert backend._build_env()["SWAYSOCK"] == str(new_sock)
+
+
+def test_sway_backend_respects_existing_env_vars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "sway-ipc.1000.999.sock").touch()
+    (runtime_dir / "wayland-1").touch()
+
+    custom_sock = tmp_path / "custom-sway.sock"
+    custom_sock.touch()
+    monkeypatch.setenv("SWAYSOCK", str(custom_sock))
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+    backend = SwayCompositorBackend(runtime_dir=runtime_dir)
+    env = backend._build_env()
+
+    assert env["SWAYSOCK"] == str(custom_sock)
+    assert env["WAYLAND_DISPLAY"] == "wayland-0"
+
+
+def test_sway_backend_passes_resolved_env_to_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SWAYSOCK", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    sway_sock = tmp_path / "sway-ipc.1000.42.sock"
+    sway_sock.touch()
+    (tmp_path / "wayland-1").touch()
+
+    run_calls: list[tuple[list[str], dict[str, str]]] = []
+    popen_calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        run_calls.append((cmd, kwargs["env"]))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    class FakeProc:
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> FakeProc:
+        popen_calls.append((cmd, kwargs["env"]))
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    backend = SwayCompositorBackend(runtime_dir=tmp_path)
+    backend.launch_tile(
+        MediaTileConfig(
+            id="youtube",
+            label="YouTube",
+            kind="browser_app",
+            target="https://youtube.com",
+        ),
+        "brave-browser",
+    )
+    backend.launch_tile(
+        MediaTileConfig(
+            id="stremio",
+            label="Stremio",
+            kind="native_app",
+            target="stremio",
+        ),
+        "brave-browser",
+    )
+
+    assert len(run_calls) == 4
+    assert run_calls[0][0] == ["swaymsg", "workspace", "2:media"]
+    assert run_calls[1][0] == ["swaymsg", '[workspace="2:media"]', "fullscreen", "enable"]
+    for _, env in run_calls:
+        assert env["SWAYSOCK"] == str(sway_sock)
+        assert env["WAYLAND_DISPLAY"] == "wayland-1"
+
+    assert len(popen_calls) == 2
+    assert popen_calls[0][0][0] == "brave-browser"
+    assert "--app=https://youtube.com" in popen_calls[0][0]
+    assert "--class=surface-media" in popen_calls[0][0]
+    assert popen_calls[0][1]["SWAYSOCK"] == str(sway_sock)
+    assert popen_calls[0][1]["WAYLAND_DISPLAY"] == "wayland-1"
+
+    assert popen_calls[1][0] == ["stremio"]
+    assert popen_calls[1][1]["SWAYSOCK"] == str(sway_sock)
+    assert popen_calls[1][1]["WAYLAND_DISPLAY"] == "wayland-1"

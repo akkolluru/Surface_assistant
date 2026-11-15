@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Literal, Protocol
 
 from daemon.ambient_light import AmbientNightModeController
@@ -57,12 +59,85 @@ class MockCompositorBackend:
 class SwayCompositorBackend:
     """Executes Sway IPC commands via swaymsg and launches Brave/Stremio."""
 
-    def __init__(self) -> None:
+    def __init__(self, runtime_dir: Path | None = None) -> None:
+        self._runtime_dir = runtime_dir
         self._active_proc: subprocess.Popen[bytes] | None = None
+
+    def _resolve_runtime_dir(self) -> Path:
+        """Return the runtime directory where Sway and Wayland sockets reside."""
+        if self._runtime_dir is not None:
+            return self._runtime_dir
+        xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+        if xdg_runtime:
+            return Path(xdg_runtime)
+        return Path(f"/run/user/{os.getuid()}")
+
+    @staticmethod
+    def _newest_matching_file(
+        directory: Path,
+        pattern: str,
+        predicate: Callable[[Path], bool] | None = None,
+    ) -> Path | None:
+        """Return the newest non-directory file matching pattern in directory."""
+        if not directory.is_dir():
+            return None
+        candidates: list[tuple[float, str, Path]] = []
+        for candidate in directory.glob(pattern):
+            if not candidate.exists() or candidate.is_dir():
+                continue
+            if predicate is not None and not predicate(candidate):
+                continue
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, candidate.name, candidate))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2]
+
+    def _resolve_swaysock(self) -> str | None:
+        """Resolve an existing SWAYSOCK path from env or runtime_dir."""
+        existing = os.environ.get("SWAYSOCK", "").strip()
+        if existing and Path(existing).exists():
+            return existing
+        sock = self._newest_matching_file(self._resolve_runtime_dir(), "sway-ipc.*.sock")
+        return str(sock) if sock is not None else None
+
+    def _resolve_wayland_display(self) -> str | None:
+        """Resolve WAYLAND_DISPLAY from env or active Wayland sockets in runtime_dir."""
+        existing = os.environ.get("WAYLAND_DISPLAY", "").strip()
+        if existing:
+            return existing
+        sock = self._newest_matching_file(
+            self._resolve_runtime_dir(),
+            "wayland-[0-9]*",
+            predicate=lambda p: not p.name.endswith(".lock")
+            and p.name.removeprefix("wayland-").isdigit(),
+        )
+        return sock.name if sock is not None else None
+
+    def _build_env(self) -> dict[str, str]:
+        """Build subprocess environment with resolved Sway and Wayland IPC variables."""
+        env = os.environ.copy()
+        swaysock = self._resolve_swaysock()
+        if swaysock is not None:
+            env["SWAYSOCK"] = swaysock
+        wayland_display = self._resolve_wayland_display()
+        if wayland_display is not None:
+            env["WAYLAND_DISPLAY"] = wayland_display
+        return env
 
     def _swaymsg(self, *args: str) -> None:
         try:
-            subprocess.run(["swaymsg", *args], check=False, capture_output=True, timeout=2.0)
+            subprocess.run(
+                ["swaymsg", *args],
+                check=False,
+                capture_output=True,
+                timeout=2.0,
+                env=self._build_env(),
+            )
         except OSError as err:
             _LOGGER.warning("swaymsg failed: %s", err)
 
@@ -87,6 +162,7 @@ class SwayCompositorBackend:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=self._build_env(),
             )
             self._swaymsg('[workspace="2:media"]', "fullscreen", "enable")
         except OSError as err:
