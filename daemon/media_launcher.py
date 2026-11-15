@@ -181,6 +181,11 @@ class MediaService:
             self._refresh_remaining()
         return self.state
 
+    def expire_sleep_timer_now(self) -> bool:
+        """Force sleep timer expiration immediately for Mac simulation and testing."""
+        self._sleep_deadline = self._clock() - 1.0
+        return self.tick_sleep_timer()
+
     def tick_sleep_timer(self) -> bool:
         """Check sleep timer expiry; returns True if timer expired and executed."""
         if self._sleep_deadline is None:

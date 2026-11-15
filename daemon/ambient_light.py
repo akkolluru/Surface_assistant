@@ -159,6 +159,14 @@ class AmbientNightModeController:
         self._video_active = False
         return self.set_manual_override(True)
 
+    def fast_forward_debounce(self, seconds: float) -> bool:
+        """Advance active debounce timers for deterministic testing and Mac simulation."""
+        if self._dark_since is not None:
+            self._dark_since -= seconds
+        if self._bright_since is not None:
+            self._bright_since -= seconds
+        return self.poll_once()
+
     def poll_once(self) -> bool:
         """Sample lux and transition Night Mode if debounce thresholds are met."""
         lux = self._backend.read_lux()

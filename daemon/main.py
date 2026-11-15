@@ -51,6 +51,7 @@ from daemon.models import (
     WeatherState,
     WhatsAppReplyRequest,
 )
+from daemon.simulator import build_simulator_router
 from daemon.wallpapers import WallpaperService
 
 _LOGGER = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class DaemonRuntime:
 
     config: AppConfig
     night_mode: AmbientNightModeController
+    ambient_backend: AmbientHardwareBackend
     audio: AudioService
     media: MediaService
     kde: KdeBackend
@@ -151,6 +153,7 @@ def build_runtime(config: AppConfig | None = None) -> DaemonRuntime:
     runtime = DaemonRuntime(
         config=cfg,
         night_mode=night_mode,
+        ambient_backend=ambient_backend,
         audio=audio,
         media=media,
         kde=kde_backend,
@@ -356,8 +359,22 @@ def create_app(
         except WebSocketDisconnect:
             rt.ws_manager.disconnect(ws)
 
+    if (
+        rt.config.resolved_backend == "mock"
+        and isinstance(rt.ambient_backend, MockAmbientBackend)
+        and isinstance(rt.kde, MockKdeBackend)
+    ):
+        app.include_router(build_simulator_router(rt, rt.ambient_backend, rt.kde))
+
     dist_dir: Path = rt.config.frontend_dist_path
     if dist_dir.exists() and (dist_dir / "index.html").exists():
+        if rt.config.resolved_backend == "mock":
+            index_file = dist_dir / "index.html"
+
+            @app.get("/sim")
+            async def serve_simulator_spa() -> FileResponse:
+                return FileResponse(path=index_file)
+
         app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
 
     return app

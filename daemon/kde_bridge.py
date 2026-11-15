@@ -32,9 +32,7 @@ class MockKdeBackend:
     def __init__(self) -> None:
         self.sent_sms: list[tuple[str, str]] = []
         self.whatsapp_replies: list[tuple[str, str]] = []
-
-    def list_devices(self) -> list[ConnectedDevice]:
-        return [
+        self._devices: list[ConnectedDevice] = [
             ConnectedDevice(
                 id="mock-primary-phone",
                 name="Primary Phone",
@@ -60,6 +58,34 @@ class MockKdeBackend:
                 charging=True,
             ),
         ]
+
+    def list_devices(self) -> list[ConnectedDevice]:
+        return [d.model_copy() for d in self._devices]
+
+    def update_device(
+        self,
+        device_id: str,
+        *,
+        reachable: bool | None = None,
+        battery_percent: int | None = None,
+        charging: bool | None = None,
+    ) -> ConnectedDevice | None:
+        for idx, dev in enumerate(self._devices):
+            if dev.id == device_id:
+                updated = dev.model_copy(
+                    update={
+                        **({"reachable": reachable} if reachable is not None else {}),
+                        **(
+                            {"battery_percent": max(0, min(100, battery_percent))}
+                            if battery_percent is not None
+                            else {}
+                        ),
+                        **({"charging": charging} if charging is not None else {}),
+                    }
+                )
+                self._devices[idx] = updated
+                return updated.model_copy()
+        return None
 
     def send_sms(self, recipient: str, message: str) -> tuple[bool, str]:
         self.sent_sms.append((recipient, message))
