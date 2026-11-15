@@ -48,3 +48,7 @@ def test_rest_and_websocket_state_flow(tmp_path: Path) -> None:
         msg = ws.receive_json()
         assert msg["type"] == "state"
         assert msg["payload"]["media"]["active_tile_id"] == "youtube"
+
+    root_resp = client.get("/")
+    assert root_resp.status_code == 200
+    assert "Surface Bedside Hub" in root_resp.text

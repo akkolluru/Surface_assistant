@@ -21,7 +21,7 @@ echo "==> [1/8] Installing base packages, VA-API, Sway, PipeWire, and KDE Connec
 sudo apt-get update
 sudo apt-get install -y \
   curl gnupg ca-certificates git jq playerctl brightnessctl \
-  python3-venv python3-pip \
+  python3-venv python3-pip nodejs npm \
   intel-media-va-driver vainfo \
   sway swayidle waybar swayosd xwayland foot \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
@@ -88,6 +88,11 @@ fi
 if [[ ! -d "${DATA_DIR}/wyoming-venv" ]]; then
   python3 -m venv "${DATA_DIR}/wyoming-venv"
   "${DATA_DIR}/wyoming-venv/bin/pip" install --upgrade pip wyoming-satellite
+fi
+
+echo "==> [6b/8] Building production Kiosk frontend bundle..."
+if [[ -f "${REPO_ROOT}/frontend/package.json" ]]; then
+  (cd "${REPO_ROOT}/frontend" && npm ci && npm run build)
 fi
 
 echo "==> [7/8] Installing systemd user services..."
