@@ -1,0 +1,45 @@
+services:
+  homeassistant:
+    container_name: surface-homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 1024m
+    environment:
+      - TZ=${WEATHER_TIMEZONE:-Asia/Kolkata}
+    volumes:
+      - ./homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+
+  whisper:
+    container_name: surface-whisper
+    image: rhasspy/wyoming-whisper:latest
+    restart: unless-stopped
+    mem_limit: 768m
+    command: --model base.en --language en --compute-type int8 --beam-size 1
+    ports:
+      - "127.0.0.1:10300:10300"
+    volumes:
+      - ./whisper-data:/data
+
+  piper:
+    container_name: surface-piper
+    image: rhasspy/wyoming-piper:latest
+    restart: unless-stopped
+    mem_limit: 512m
+    command: --voice en_US-lessac-medium
+    ports:
+      - "127.0.0.1:10200:10200"
+    volumes:
+      - ./piper-data:/data
+
+  openwakeword:
+    container_name: surface-openwakeword
+    image: rhasspy/wyoming-openwakeword:latest
+    restart: unless-stopped
+    mem_limit: 384m
+    command: --preload-model hey_jarvis
+    ports:
+      - "127.0.0.1:10400:10400"
+    volumes:
+      - ./openwakeword-data:/data

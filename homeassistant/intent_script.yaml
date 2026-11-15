@@ -1,0 +1,69 @@
+SurfaceOpenMedia:
+  speech:
+    text: "Opening {{ app }}."
+  action:
+    - service: rest_command.surface_open_media
+      data:
+        tile_id: "{{ app | lower | replace(' prime video', 'prime') | replace(' ', '') }}"
+
+SurfaceReturnHome:
+  speech:
+    text: "Returning to the hub."
+  action:
+    - service: rest_command.surface_return_home
+
+SurfaceNextWallpaper:
+  speech:
+    text: "Switching wallpaper."
+  action:
+    - service: rest_command.surface_next_wallpaper
+
+SurfaceNightModeOn:
+  speech:
+    text: "Turning on night mode."
+  action:
+    - service: rest_command.surface_set_night_mode
+      data:
+        enabled: true
+
+SurfaceNightModeOff:
+  speech:
+    text: "Turning off night mode."
+  action:
+    - service: rest_command.surface_set_night_mode
+      data:
+        enabled: false
+
+SurfaceSleepTimer:
+  speech:
+    text: "Sleep timer set for {{ minutes }} minutes."
+  action:
+    - service: rest_command.surface_set_sleep_timer
+      data:
+        minutes: "{{ minutes | int }}"
+
+SurfaceCancelSleepTimer:
+  speech:
+    text: "Sleep timer cancelled."
+  action:
+    - service: rest_command.surface_set_sleep_timer
+      data:
+        minutes: 0
+
+SurfaceSendSms:
+  speech:
+    text: "Sending text to {{ recipient }}."
+  action:
+    - service: rest_command.surface_send_sms
+      data:
+        recipient: "{{ recipient }}"
+        message: "{{ message }}"
+
+SurfaceReplyWhatsApp:
+  speech:
+    text: "Replying to {{ sender }} on WhatsApp."
+  action:
+    - service: rest_command.surface_reply_whatsapp
+      data:
+        sender: "{{ sender }}"
+        message: "{{ message }}"

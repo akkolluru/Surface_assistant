@@ -1,0 +1,31 @@
+- id: surface_scene_relax
+  name: Evening Relax
+  entities:
+    input_boolean.bedroom_main_light:
+      state: "off"
+    input_boolean.bedside_lamp:
+      state: "on"
+    input_boolean.bedroom_ac_power:
+      state: "on"
+    input_number.bedroom_ac_temp:
+      state: 24
+
+- id: surface_scene_movie
+  name: Movie Night
+  entities:
+    input_boolean.bedroom_main_light:
+      state: "off"
+    input_boolean.bedside_lamp:
+      state: "off"
+    input_boolean.bedroom_ac_power:
+      state: "on"
+
+- id: surface_scene_goodnight
+  name: Goodnight
+  entities:
+    input_boolean.bedroom_main_light:
+      state: "off"
+    input_boolean.bedside_lamp:
+      state: "off"
+    input_boolean.desk_plug:
+      state: "off"

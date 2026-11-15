@@ -1,0 +1,69 @@
+language: "en"
+intents:
+  SurfaceOpenMedia:
+    data:
+      - sentences:
+          - "(open|launch|start|switch to) {app}"
+  SurfaceReturnHome:
+    data:
+      - sentences:
+          - "(go|return) [back] home"
+          - "close [the] (video|app|player)"
+  SurfaceNextWallpaper:
+    data:
+      - sentences:
+          - "(next|skip|change) [the] wallpaper"
+  SurfaceNightModeOn:
+    data:
+      - sentences:
+          - "(turn|switch) on night mode"
+          - "enable night mode"
+  SurfaceNightModeOff:
+    data:
+      - sentences:
+          - "(turn|switch) off night mode"
+          - "disable night mode"
+  SurfaceSleepTimer:
+    data:
+      - sentences:
+          - "set [a] sleep timer for {minutes} minute[s]"
+          - "sleep timer {minutes} minute[s]"
+  SurfaceCancelSleepTimer:
+    data:
+      - sentences:
+          - "(cancel|stop|turn off) [the] sleep timer"
+  SurfaceSendSms:
+    data:
+      - sentences:
+          - "(send [a] text|text|sms) [to] {recipient} saying {message}"
+  SurfaceReplyWhatsApp:
+    data:
+      - sentences:
+          - "reply [to] {sender} [on whatsapp] saying {message}"
+
+lists:
+  app:
+    values:
+      - in: "youtube"
+        out: "youtube"
+      - in: "netflix"
+        out: "netflix"
+      - in: "prime video"
+        out: "prime"
+      - in: "prime"
+        out: "prime"
+      - in: "anime"
+        out: "anime"
+      - in: "stremio"
+        out: "stremio"
+  minutes:
+    range:
+      type: "number"
+      from: 5
+      to: 180
+  recipient:
+    wildcard: true
+  sender:
+    wildcard: true
+  message:
+    wildcard: true
