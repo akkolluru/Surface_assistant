@@ -12,8 +12,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client, intent
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import DOMAIN
-
 _LOGGER = logging.getLogger(__name__)
 DAEMON_KNOWLEDGE_URL = "http://127.0.0.1:8000/api/knowledge/query"
 
