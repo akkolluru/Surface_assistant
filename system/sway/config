@@ -21,7 +21,11 @@ xwayland enable
 
 # Assign Kiosk Hub to Workspace 1 and Video Apps to Workspace 2
 assign [app_id="surface-kiosk"] workspace "1:hub"
+assign [class="surface-kiosk"] workspace "1:hub"
 for_window [app_id="surface-kiosk"] fullscreen enable
+for_window [class="surface-kiosk"] fullscreen enable
+for_window [app_id="surface-media"] move to workspace "2:media", fullscreen enable
+for_window [class="surface-media"] move to workspace "2:media", fullscreen enable
 for_window [class="Stremio"] move to workspace "2:media", fullscreen enable
 for_window [app_id="stremio"] move to workspace "2:media", fullscreen enable
 
@@ -38,6 +42,8 @@ bindsym $mod+1 workspace "1:hub"
 bindsym $mod+2 workspace "2:media"
 
 # Startup session services
+exec systemctl --user import-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS
+exec sh -c 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --systemd WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS || true'
 exec $scripts/../pipewire-rules/init-sinks.sh
 exec swayosd-server
 exec waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css
