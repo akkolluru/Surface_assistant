@@ -58,7 +58,7 @@
    - [x] Update `system/setup-surface.sh` for Ubuntu 24.04/26.04 compatibility (`docker.io` / `docker-ce` & `docker-compose-v2` / `docker-compose-plugin` check, Stremio Flatpak + `/usr/local/bin/stremio` wrapper, `loginctl enable-linger`, and `~/Surface_assistant` path consistency with `system/systemd/surface-daemon.service`).
    - [x] Add `system/scripts/setup-kiosk-autologin.sh` (TTY1 `getty@tty1` autologin + guarded Sway launch) and `system/scripts/verify-surface.sh` (Phase 2 hardware/audio/service verification).
 2. **Sync Repo to Surface:**
-   - [ ] Run `./scripts/deploy-surface.sh` from Mac to populate `~/Surface_assistant` on `192.168.0.100`.
+   - [x] Run `./scripts/deploy-surface.sh` from Mac to populate `~/Surface_assistant` on `192.168.0.100`.
 3. **User Manual Step on Surface (requires `sudo` + MOK reboot):**
    - [ ] Run `bash ~/Surface_assistant/system/setup-surface.sh` (or with `--with-autologin`) on the Surface, set the Secure Boot MOK enrollment password when prompted, reboot, and enroll the MOK key at the blue MokManager screen.
    - [ ] Verify UEFI **Enable Battery Limit Mode** (50% cap) is ON in Surface UEFI if not already set.
