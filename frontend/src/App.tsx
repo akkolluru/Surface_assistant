@@ -181,7 +181,18 @@ function KioskHub() {
         // Ignore capture release errors in synthetic environments
       }
 
-      if (!wasActive) return;
+      if (!wasActive) {
+        if (suppressClickRef.current) {
+          window.setTimeout(() => {
+            suppressClickRef.current = false;
+          }, 300);
+        }
+        return;
+      }
+
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 300);
 
       if (!canceled && dx < -60 && activePane < 2) {
         navigatePane((activePane + 1) as 0 | 1 | 2);
@@ -237,8 +248,12 @@ function KioskHub() {
     const dy = event.clientY - drag.startY;
     drag.lastX = event.clientX;
 
+    if (Math.hypot(dx, dy) > 12) {
+      suppressClickRef.current = true;
+    }
+
     if (!drag.active) {
-      if (Math.abs(dx) < 14 || Math.abs(dx) <= Math.abs(dy) * 1.2) {
+      if (Math.abs(dx) < 24 || Math.abs(dx) <= Math.abs(dy) * 1.25) {
         return;
       }
       drag.active = true;

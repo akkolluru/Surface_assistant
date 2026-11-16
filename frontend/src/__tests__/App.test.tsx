@@ -170,6 +170,17 @@ describe("Surface Assistant Kiosk UI", () => {
     expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
     expect(track.style.transition).toContain("transform 420ms");
 
+    // Swiping starting on a tile must navigate panes without triggering a tile launch click
+    const launchSpy = vi.spyOn(daemonSocket.daemonApi, "launchMedia");
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
+    const animeBtn = screen.getByRole("button", { name: /Anime/i });
+    fireEvent.pointerDown(animeBtn, { clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(animeBtn, { clientX: 420, clientY: 302 });
+    fireEvent.pointerUp(animeBtn, { clientX: 420, clientY: 302 });
+    fireEvent.click(animeBtn);
+    expect(launchSpy).not.toHaveBeenCalled();
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
