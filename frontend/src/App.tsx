@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from "react";
 import { AmbientHubPane } from "./components/AmbientHubPane";
 import { MediaLauncher } from "./components/MediaLauncher";
 import { SimulatorConsole } from "./components/SimulatorConsole";
@@ -41,10 +41,13 @@ function KioskHub() {
 
   const haClientRef = useRef<HaClient | null>(null);
   const osdTimerRef = useRef<number | null>(null);
+  const trackRef = useRef<HTMLElement>(null);
+  const suppressClickRef = useRef(false);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
     startY: number;
+    lastX: number;
     active: boolean;
   } | null>(null);
 
@@ -160,16 +163,68 @@ function KioskHub() {
       .catch(() => {});
   };
 
+  const finalizeDrag = useCallback(
+    (pointerId: number | null, finalX?: number, canceled = false) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      if (pointerId !== null && drag.pointerId !== pointerId) return;
+
+      const dx = (finalX ?? drag.lastX) - drag.startX;
+      const wasActive = drag.active;
+      dragRef.current = null;
+
+      try {
+        if (trackRef.current?.hasPointerCapture?.(drag.pointerId)) {
+          trackRef.current.releasePointerCapture(drag.pointerId);
+        }
+      } catch {
+        // Ignore capture release errors in synthetic environments
+      }
+
+      if (!wasActive) return;
+
+      if (!canceled && dx < -60 && activePane < 2) {
+        navigatePane((activePane + 1) as 0 | 1 | 2);
+        return;
+      }
+      if (!canceled && dx > 60 && activePane > 0) {
+        navigatePane((activePane - 1) as 0 | 1 | 2);
+        return;
+      }
+      navigatePane(activePane);
+    },
+    [activePane, navigatePane]
+  );
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onWindowPointerUp = (e: globalThis.PointerEvent) => finalizeDrag(e.pointerId, e.clientX);
+    const onWindowPointerCancel = (e: globalThis.PointerEvent) =>
+      finalizeDrag(e.pointerId, e.clientX, true);
+    const onWindowBlur = () => finalizeDrag(null, undefined, true);
+
+    window.addEventListener("pointerup", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerCancel);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      window.removeEventListener("pointerup", onWindowPointerUp);
+      window.removeEventListener("pointercancel", onWindowPointerCancel);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, [finalizeDrag, isDragging]);
+
   const handlePointerDown = (event: PointerEvent<HTMLElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest("button, input, select, textarea, a, [role='slider']")) {
+    if (target?.closest("input, select, textarea, [role='slider']")) {
       return;
     }
+    suppressClickRef.current = false;
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
       active: false,
     };
   };
@@ -180,12 +235,20 @@ function KioskHub() {
 
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
+    drag.lastX = event.clientX;
+
     if (!drag.active) {
       if (Math.abs(dx) < 14 || Math.abs(dx) <= Math.abs(dy) * 1.2) {
         return;
       }
       drag.active = true;
+      suppressClickRef.current = true;
       setIsDragging(true);
+      try {
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Ignore pointer capture errors when pointerId is synthetic
+      }
     }
 
     const atLeftEdge = activePane === 0 && dx > 0;
@@ -194,23 +257,24 @@ function KioskHub() {
     setDragOffsetPx(damped);
   };
 
-  const finishDrag = (event: PointerEvent<HTMLElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const dx = event.clientX - drag.startX;
-    const wasActive = drag.active;
-    dragRef.current = null;
-    if (!wasActive) return;
+  const handlePointerUp = (event: PointerEvent<HTMLElement>) => {
+    finalizeDrag(event.pointerId, event.clientX);
+  };
 
-    if (dx < -60 && activePane < 2) {
-      navigatePane((activePane + 1) as 0 | 1 | 2);
-      return;
+  const handlePointerCancel = (event: PointerEvent<HTMLElement>) => {
+    finalizeDrag(event.pointerId, undefined, true);
+  };
+
+  const handleLostPointerCapture = (event: PointerEvent<HTMLElement>) => {
+    finalizeDrag(event.pointerId);
+  };
+
+  const handleClickCapture = (event: ReactMouseEvent<HTMLElement>) => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
     }
-    if (dx > 60 && activePane > 0) {
-      navigatePane((activePane - 1) as 0 | 1 | 2);
-      return;
-    }
-    navigatePane(activePane);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -233,14 +297,17 @@ function KioskHub() {
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black text-white">
       <main
+        ref={trackRef}
         tabIndex={0}
         aria-label="Bedside Hub Panes"
         className="pane-track"
         style={trackStyle}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={finishDrag}
-        onPointerCancel={finishDrag}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={handleLostPointerCapture}
+        onClickCapture={handleClickCapture}
         onKeyDown={handleKeyDown}
       >
         <SmartHomePane

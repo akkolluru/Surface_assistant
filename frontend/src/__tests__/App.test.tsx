@@ -162,6 +162,14 @@ describe("Surface Assistant Kiosk UI", () => {
     fireEvent.pointerUp(track, { clientX: 520, clientY: 205 });
     expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
 
+    // Ensure pointerCancel snaps back cleanly instead of sticking mid-drag
+    fireEvent.pointerDown(track, { clientX: 400, clientY: 200 });
+    fireEvent.pointerMove(track, { clientX: 320, clientY: 200 });
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + -80px), 0, 0)");
+    fireEvent.pointerCancel(track, { clientX: 320, clientY: 200 });
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+    expect(track.style.transition).toContain("transform 420ms");
+
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
