@@ -61,15 +61,16 @@ if [[ "${SURFACE_DIR}" != "/" ]]; then
   SURFACE_DIR="${SURFACE_DIR%/}"
 fi
 
-# Resolve remote mkdir command and rsync destination while preserving ~/ expansion
+# Resolve remote mkdir command and rsync destination (SSH rsync treats relative paths as $HOME-relative,
+# avoiding literal "~" directory creation when rsync enables secluded-args).
 if [[ "${SURFACE_DIR}" == "~" ]]; then
   REMOTE_MKDIR_CMD='mkdir -p "$HOME"'
-  REMOTE_RSYNC_PATH='~/'
+  REMOTE_RSYNC_PATH='./'
 elif [[ "${SURFACE_DIR}" == "~/"* ]]; then
   REL_DIR="${SURFACE_DIR#~/}"
   printf -v ESCAPED_REL_DIR '%q' "${REL_DIR}"
   REMOTE_MKDIR_CMD="mkdir -p \"\$HOME\"/${ESCAPED_REL_DIR}"
-  REMOTE_RSYNC_PATH="~/${ESCAPED_REL_DIR}/"
+  REMOTE_RSYNC_PATH="${ESCAPED_REL_DIR}/"
 else
   printf -v ESCAPED_DIR '%q' "${SURFACE_DIR}"
   REMOTE_MKDIR_CMD="mkdir -p ${ESCAPED_DIR}"
