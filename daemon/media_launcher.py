@@ -59,8 +59,13 @@ class MockCompositorBackend:
 class SwayCompositorBackend:
     """Executes Sway IPC commands via swaymsg and launches Brave/Stremio."""
 
-    def __init__(self, runtime_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        runtime_dir: Path | None = None,
+        x11_unix_dir: Path = Path("/tmp/.X11-unix"),
+    ) -> None:
         self._runtime_dir = runtime_dir
+        self._x11_unix_dir = x11_unix_dir
         self._active_proc: subprocess.Popen[bytes] | None = None
 
     def _resolve_runtime_dir(self) -> Path:
@@ -118,8 +123,20 @@ class SwayCompositorBackend:
         )
         return sock.name if sock is not None else None
 
+    def _resolve_display(self) -> str | None:
+        """Resolve X11/XWayland DISPLAY from env or /tmp/.X11-unix sockets."""
+        existing = os.environ.get("DISPLAY", "").strip()
+        if existing:
+            return existing
+        sock = self._newest_matching_file(
+            self._x11_unix_dir,
+            "X[0-9]*",
+            predicate=lambda p: p.name.removeprefix("X").isdigit(),
+        )
+        return f":{sock.name.removeprefix('X')}" if sock is not None else None
+
     def _build_env(self) -> dict[str, str]:
-        """Build subprocess environment with resolved Sway and Wayland IPC variables."""
+        """Build subprocess environment with resolved Sway, Wayland, and X11 IPC variables."""
         env = os.environ.copy()
         swaysock = self._resolve_swaysock()
         if swaysock is not None:
@@ -127,6 +144,9 @@ class SwayCompositorBackend:
         wayland_display = self._resolve_wayland_display()
         if wayland_display is not None:
             env["WAYLAND_DISPLAY"] = wayland_display
+        display = self._resolve_display()
+        if display is not None:
+            env["DISPLAY"] = display
         return env
 
     def _swaymsg(self, *args: str) -> None:
@@ -148,7 +168,7 @@ class SwayCompositorBackend:
                 browser_bin,
                 f"--app={tile.target}",
                 "--class=surface-media",
-                "--ozone-platform=wayland",
+                "--ozone-platform=x11",
                 "--touch-events=enabled",
                 "--password-store=basic",
                 "--enable-features=VaapiVideoDecoder",

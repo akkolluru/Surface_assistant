@@ -137,6 +137,7 @@ def test_sway_backend_discovers_sockets_from_runtime_dir(
 ) -> None:
     monkeypatch.delenv("SWAYSOCK", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("DISPLAY", raising=False)
 
     old_sock = tmp_path / "sway-ipc.1000.100.sock"
     new_sock = tmp_path / "sway-ipc.1000.200.sock"
@@ -152,11 +153,16 @@ def test_sway_backend_discovers_sockets_from_runtime_dir(
     os.utime(wayland_sock, (1000, 1000))
     os.utime(wayland_lock, (3000, 3000))
 
-    backend = SwayCompositorBackend(runtime_dir=tmp_path)
+    x11_dir = tmp_path / "x11"
+    x11_dir.mkdir()
+    (x11_dir / "X0").touch()
+
+    backend = SwayCompositorBackend(runtime_dir=tmp_path, x11_unix_dir=x11_dir)
     env = backend._build_env()
 
     assert env["SWAYSOCK"] == str(new_sock)
     assert env["WAYLAND_DISPLAY"] == "wayland-1"
+    assert env["DISPLAY"] == ":0"
 
     # Stale/non-existent SWAYSOCK falls back to discovered socket
     monkeypatch.setenv("SWAYSOCK", str(tmp_path / "missing.sock"))
