@@ -149,6 +149,7 @@ class SwayCompositorBackend:
                 f"--app={tile.target}",
                 "--class=surface-media",
                 "--ozone-platform=wayland",
+                "--password-store=basic",
                 "--enable-features=VaapiVideoDecoder",
                 "--start-fullscreen",
                 "--no-first-run",

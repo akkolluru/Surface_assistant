@@ -50,4 +50,4 @@ exec waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css
 exec kdeconnect-indicator
 
 # Launch Brave Kiosk on Workspace 1 once daemon is listening on 127.0.0.1:8000
-exec sh -c 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=wayland --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
+exec sh -c 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=wayland --password-store=basic --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
