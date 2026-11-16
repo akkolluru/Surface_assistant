@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { AmbientHubPane } from "./components/AmbientHubPane";
 import { MediaLauncher } from "./components/MediaLauncher";
 import { SimulatorConsole } from "./components/SimulatorConsole";
@@ -35,65 +36,27 @@ function KioskHub() {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [activePane, setActivePane] = useState<0 | 1 | 2>(1);
+  const [dragOffsetPx, setDragOffsetPx] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
 
-  const scrollerRef = useRef<HTMLElement>(null);
   const haClientRef = useRef<HaClient | null>(null);
   const osdTimerRef = useRef<number | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
 
-  const navigatePane = useCallback((index: 0 | 1 | 2, behavior: ScrollBehavior = "smooth") => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    const target = scroller.children.item(index) as HTMLElement | null;
-    if (target) {
-      target.scrollIntoView({ behavior, inline: "start", block: "nearest" });
-    }
+  const navigatePane = useCallback((index: 0 | 1 | 2) => {
+    setDragOffsetPx(0);
+    setIsDragging(false);
     setActivePane(index);
   }, []);
-
-  // Center on Pane 1 (Ambient Hub) on initial mount
-  useEffect(() => {
-    navigatePane(1, "auto");
-  }, [navigatePane]);
 
   useEffect(() => {
     document.title = PANE_TITLES[activePane];
   }, [activePane]);
-
-  // Sync activePane using scrollsnapchange (or IntersectionObserver fallback)
-  useEffect(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-
-    const handleSnapChange = (event: Event) => {
-      const snapTarget = (event as Event & { snapTargetInline?: Element | null }).snapTargetInline;
-      if (!snapTarget) return;
-      const idx = Array.from(scroller.children).indexOf(snapTarget);
-      if (idx === 0 || idx === 1 || idx === 2) {
-        setActivePane(idx);
-      }
-    };
-
-    if ("onscrollsnapchange" in HTMLElement.prototype) {
-      scroller.addEventListener("scrollsnapchange", handleSnapChange);
-      return () => scroller.removeEventListener("scrollsnapchange", handleSnapChange);
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-            const idx = Array.from(scroller.children).indexOf(entry.target);
-            if (idx === 0 || idx === 1 || idx === 2) {
-              setActivePane(idx);
-            }
-          }
-        }
-      },
-      { root: scroller, threshold: 0.6 }
-    );
-    Array.from(scroller.children).forEach((child) => observer.observe(child));
-    return () => observer.disconnect();
-  }, []);
 
   // Connect Daemon REST + WebSocket
   useEffect(() => {
@@ -197,13 +160,88 @@ function KioskHub() {
       .catch(() => {});
   };
 
+  const handlePointerDown = (event: PointerEvent<HTMLElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, select, textarea, a, [role='slider']")) {
+      return;
+    }
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.active) {
+      if (Math.abs(dx) < 14 || Math.abs(dx) <= Math.abs(dy) * 1.2) {
+        return;
+      }
+      drag.active = true;
+      setIsDragging(true);
+    }
+
+    const atLeftEdge = activePane === 0 && dx > 0;
+    const atRightEdge = activePane === 2 && dx < 0;
+    const damped = atLeftEdge || atRightEdge ? dx * 0.35 : dx;
+    setDragOffsetPx(damped);
+  };
+
+  const finishDrag = (event: PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const wasActive = drag.active;
+    dragRef.current = null;
+    if (!wasActive) return;
+
+    if (dx < -60 && activePane < 2) {
+      navigatePane((activePane + 1) as 0 | 1 | 2);
+      return;
+    }
+    if (dx > 60 && activePane > 0) {
+      navigatePane((activePane - 1) as 0 | 1 | 2);
+      return;
+    }
+    navigatePane(activePane);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+      return;
+    }
+    if (event.key === "ArrowLeft" && activePane > 0) {
+      navigatePane((activePane - 1) as 0 | 1 | 2);
+    } else if (event.key === "ArrowRight" && activePane < 2) {
+      navigatePane((activePane + 1) as 0 | 1 | 2);
+    }
+  };
+
+  const trackStyle: CSSProperties = {
+    transform: `translate3d(calc(-${activePane * 100}vw + ${dragOffsetPx}px), 0, 0)`,
+    transition: isDragging ? "none" : "transform 420ms cubic-bezier(0.22, 1, 0.36, 1)",
+  };
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black text-white">
       <main
-        ref={scrollerRef}
         tabIndex={0}
         aria-label="Bedside Hub Panes"
-        className="pane-scroller"
+        className="pane-track"
+        style={trackStyle}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishDrag}
+        onPointerCancel={finishDrag}
+        onKeyDown={handleKeyDown}
       >
         <SmartHomePane
           entities={haEntities}

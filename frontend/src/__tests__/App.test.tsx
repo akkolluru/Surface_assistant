@@ -1,10 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import App from "../App";
 import { AmbientHubPane } from "../components/AmbientHubPane";
 import { DevicePill } from "../components/DevicePill";
 import { MediaLauncher } from "../components/MediaLauncher";
 import { SmartHomePane } from "../components/SmartHomePane";
 import { VolumeOSD } from "../components/VolumeOSD";
+import * as daemonSocket from "../services/daemonSocket";
 import { DEFAULT_DAEMON_SNAPSHOT } from "../services/daemonSocket";
 import { PLACEHOLDER_HA_ENTITIES } from "../services/haSocket";
 
@@ -138,5 +140,29 @@ describe("Surface Assistant Kiosk UI", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Mute Alarms & Timers/i }));
     expect(onChange).toHaveBeenCalledWith("alarm", { muted: true });
+  });
+
+  it("slides smoothly between panes via navigation dots and pointer swipe", async () => {
+    vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
+    vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue(DEFAULT_DAEMON_SNAPSHOT);
+    vi.stubGlobal("PointerEvent", MouseEvent);
+
+    render(<App />);
+    await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
+    const track = screen.getByLabelText("Bedside Hub Panes");
+
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+    expect(track.style.transition).toContain("transform 420ms");
+
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
+    expect(track.style.transform).toBe("translate3d(calc(-200vw + 0px), 0, 0)");
+
+    fireEvent.pointerDown(track, { clientX: 400, clientY: 200 });
+    fireEvent.pointerMove(track, { clientX: 520, clientY: 205 });
+    fireEvent.pointerUp(track, { clientX: 520, clientY: 205 });
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 });

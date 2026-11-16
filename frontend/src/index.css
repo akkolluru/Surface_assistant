@@ -17,28 +17,19 @@ body,
   overscroll-behavior-x: none;
 }
 
-.pane-scroller {
+.pane-track {
   display: flex;
-  width: 100vw;
+  width: 300vw;
   height: 100vh;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
-  touch-action: pan-x;
-}
-
-.pane-scroller::-webkit-scrollbar {
-  display: none;
+  will-change: transform;
+  touch-action: pan-y;
 }
 
 .pane-item {
   flex: 0 0 100vw;
   width: 100vw;
   height: 100vh;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
+  overflow-y: auto;
 }
 
 .glass-panel {
@@ -66,7 +57,7 @@ body,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pane-scroller {
-    scroll-behavior: auto;
+  .pane-track {
+    transition-duration: 1ms !important;
   }
 }
