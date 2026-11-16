@@ -158,6 +158,10 @@ cp "${REPO_ROOT}/system/pipewire-rules/init-sinks.sh" "${DATA_DIR}/pipewire-rule
 cp "${REPO_ROOT}/system/scripts/"*.sh "${DATA_DIR}/scripts/"
 chmod +x "${DATA_DIR}/pipewire-rules/init-sinks.sh" "${DATA_DIR}/scripts/"*.sh
 
+sudo mkdir -p /etc/iptsd.d
+sudo cp "${REPO_ROOT}/system/iptsd/90-touch-calibration.conf" /etc/iptsd.d/90-touch-calibration.conf
+sudo systemctl try-restart 'iptsd@*' || true
+
 echo "==> [6/8] Creating Python virtual environments (daemon + wyoming-satellite)..."
 if [[ ! -d "${DATA_DIR}/daemon-venv" ]]; then
   python3 -m venv "${DATA_DIR}/daemon-venv"
