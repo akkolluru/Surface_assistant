@@ -19,7 +19,7 @@
   - Laptop: **Main Laptop**
 - **Pending User Decisions (keep configurable, do not hardcode):**
   - Final wake word (currently defaults to `hey_jarvis` in `config.example.yaml`)
-  - `ANIME_PORTAL_URL` (currently placeholder `https://example.com` in `.env.example`)
+  - `ANIME_PORTAL_URL` (set to `https://www.netflix.com/browse/genre/7424` in live `.env`; `.env.example` stays placeholder)
   - Initiating brand-new WhatsApp messages via KDE Connect (outbound SMS + replying to incoming WhatsApp notifications are baseline scope; new WhatsApp threads are stretch/research)
 
 ---
@@ -48,28 +48,28 @@
 ---
 
 ## Phase 2 — Surface Pro 5 OS, Sway Kiosk & Audio Bring-Up *(Mac → Surface)*
-**Status:** `[~] In Progress (Mac/repo changes complete; Surface SSH & MOK verification pending)`
+**Status:** `[x] Complete` (Branch: `phase-2`, merged to `main`)
 
 ### Tasks
 1. **Fix Sway ↔ `systemd --user` & Media Window Rules (on Mac):**
    - [x] Update `system/sway/config` to export Wayland/D-Bus env vars into `systemd --user`:
-     `exec systemctl --user import-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS` (plus guarded `dbus-update-activation-environment --systemd` and `SwayCompositorBackend` socket fallback in `daemon/media_launcher.py`).
+     `exec systemctl --user import-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS` (plus guarded `dbus-update-activation-environment --systemd`, `--password-store=basic` for Brave, and `SwayCompositorBackend` socket fallback in `daemon/media_launcher.py`).
    - [x] Add `for_window [app_id="surface-media"] move to workspace "2:media", fullscreen enable` and `for_window [class="surface-media"] move to workspace "2:media", fullscreen enable` (plus `[class="surface-kiosk"]` rules).
    - [x] Update `system/setup-surface.sh` for Ubuntu 24.04/26.04 compatibility (`docker.io` / `docker-ce` & `docker-compose-v2` / `docker-compose-plugin` check, Stremio Flatpak + `/usr/local/bin/stremio` wrapper, `loginctl enable-linger`, and `~/Surface_assistant` path consistency with `system/systemd/surface-daemon.service`).
-   - [x] Add `system/scripts/setup-kiosk-autologin.sh` (TTY1 `getty@tty1` autologin + guarded Sway launch) and `system/scripts/verify-surface.sh` (Phase 2 hardware/audio/service verification).
+   - [x] Add `system/scripts/setup-kiosk-autologin.sh` (GDM Sway autologin on Ubuntu Desktop + TTY1 `getty@tty1` fallback) and `system/scripts/verify-surface.sh` (Phase 2 hardware/audio/service verification).
 2. **Sync Repo to Surface:**
    - [x] Run `./scripts/deploy-surface.sh` from Mac to populate `~/Surface_assistant` on `192.168.0.100`.
 3. **User Manual Step on Surface (requires `sudo` + MOK reboot):**
-   - [ ] Run `bash ~/Surface_assistant/system/setup-surface.sh` (or with `--with-autologin`) on the Surface, set the Secure Boot MOK enrollment password when prompted, reboot, and enroll the MOK key at the blue MokManager screen.
-   - [ ] Verify UEFI **Enable Battery Limit Mode** (50% cap) is ON in Surface UEFI if not already set.
+   - [x] Run `bash ~/Surface_assistant/system/setup-surface.sh --with-autologin` on the Surface, enroll MOK key on reboot, and boot into `7.3.4-1-surface`.
+   - [x] Verify UEFI **Enable Battery Limit Mode** (50% cap) is ON (`BAT1/capacity: 50`, `BAT1/status: Not charging`).
 4. **Configure Kiosk Autologin & Verify Hardware (via SSH):**
-   - [ ] Run `bash ~/Surface_assistant/system/scripts/setup-kiosk-autologin.sh` (if not passed via `--with-autologin`) and `bash ~/Surface_assistant/system/scripts/verify-surface.sh`.
+   - [x] Run `bash ~/Surface_assistant/system/scripts/setup-kiosk-autologin.sh` and `bash ~/Surface_assistant/system/scripts/verify-surface.sh`.
 
 ### Verification Checkpoint (over SSH on Surface)
-- `uname -r` shows `-surface` kernel; `vainfo` confirms Intel HD 620 VA-API decoding.
-- `cat /sys/bus/iio/devices/iio:device0/in_illuminance_raw` reads live lux; backlight write permission (`video` group + udev rule) works without sudo.
-- `pactl list short sinks` shows `alarm-sink`, `tts-sink`, and `media-sink` independently adjustable via `wpctl`/`pactl`.
-- `curl http://127.0.0.1:8000/api/health` responds on Surface, and Brave kiosk opens on Sway `1:hub`.
+- [x] `uname -r` shows `7.3.4-1-surface`; `vainfo` confirms Intel HD 620 VA-API decoding (`Intel iHD driver 26.1.2`).
+- [x] `/sys/bus/iio/devices/iio:device*/in_illuminance_raw` reads live lux; backlight write permission (`video` group + udev rule) works without sudo.
+- [x] `pactl list short sinks` shows `alarm-sink`, `tts-sink`, and `media-sink` independently adjustable via `wpctl`/`pactl`.
+- [x] `curl http://127.0.0.1:8000/api/health` responds on Surface (`{"status":"ok","backend":"linux"}`), and Brave kiosk (`Surface Bedside Hub - Brave`) opens on Sway `1:hub`.
 
 ---
 
