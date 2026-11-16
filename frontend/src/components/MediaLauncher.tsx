@@ -77,7 +77,7 @@ export function MediaLauncher({
               key={tile.id}
               type="button"
               onClick={() => onLaunchTile(tile.id)}
-              className={`touch-target group relative flex min-h-36 flex-col justify-between rounded-3xl border bg-gradient-to-br p-6 text-left backdrop-blur-xl transition hover:scale-[1.015] active:scale-[0.98] ${style.gradient}`}
+              className={`touch-target group relative flex min-h-36 flex-col justify-between rounded-3xl border bg-gradient-to-br p-6 text-left backdrop-blur-xl transition hover:brightness-110 active:brightness-110 ${style.gradient}`}
             >
               <div className="flex items-center justify-between">
                 <div className="rounded-2xl bg-white/10 p-3">

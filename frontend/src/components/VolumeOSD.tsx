@@ -130,7 +130,7 @@ export function VolumeOSD({ open, audio, onClose, onChangeLevel }: VolumeOSDProp
                   onChange={(e) =>
                     onChangeLevel(channel, { percent: Number(e.target.value), muted: false })
                   }
-                  className="h-2 w-full cursor-pointer accent-sky-400"
+                  className="min-h-11 w-full cursor-pointer touch-none py-3 accent-sky-400"
                 />
               </label>
             </div>

@@ -94,7 +94,7 @@ export function SmartHomePane({
                     value: Number(e.target.value),
                   })
                 }
-                className="h-2 w-full cursor-pointer accent-amber-400"
+                className="min-h-11 w-full cursor-pointer touch-none py-3 accent-amber-400"
               />
             </label>
 
@@ -249,7 +249,7 @@ export function SmartHomePane({
                 key={scene.id}
                 type="button"
                 onClick={() => onCallService("scene", "turn_on", { entity_id: scene.id })}
-                className="touch-target rounded-2xl bg-white/8 px-3 py-3 text-sm font-medium text-white/85 transition hover:bg-white/15 active:scale-95"
+                className="touch-target rounded-2xl bg-white/8 px-3 py-3 text-sm font-medium text-white/85 transition hover:bg-white/15 active:bg-white/25 active:brightness-110"
               >
                 {scene.label}
               </button>

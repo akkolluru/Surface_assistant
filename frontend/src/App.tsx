@@ -41,6 +41,7 @@ function KioskHub() {
 
   const haClientRef = useRef<HaClient | null>(null);
   const osdTimerRef = useRef<number | null>(null);
+  const suppressTimerRef = useRef<number | null>(null);
   const trackRef = useRef<HTMLElement>(null);
   const suppressClickRef = useRef(false);
   const dragRef = useRef<{
@@ -163,6 +164,15 @@ function KioskHub() {
       .catch(() => {});
   };
 
+  const clearSuppressTimer = useCallback(() => {
+    if (suppressTimerRef.current !== null) {
+      window.clearTimeout(suppressTimerRef.current);
+      suppressTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearSuppressTimer, [clearSuppressTimer]);
+
   const finalizeDrag = useCallback(
     (pointerId: number | null, finalX?: number, canceled = false) => {
       const drag = dragRef.current;
@@ -182,17 +192,14 @@ function KioskHub() {
       }
 
       if (!wasActive) {
-        if (suppressClickRef.current) {
-          window.setTimeout(() => {
-            suppressClickRef.current = false;
-          }, 300);
-        }
         return;
       }
 
-      window.setTimeout(() => {
+      clearSuppressTimer();
+      suppressTimerRef.current = window.setTimeout(() => {
         suppressClickRef.current = false;
-      }, 300);
+        suppressTimerRef.current = null;
+      }, 150);
 
       if (!canceled && dx < -60 && activePane < 2) {
         navigatePane((activePane + 1) as 0 | 1 | 2);
@@ -204,11 +211,10 @@ function KioskHub() {
       }
       navigatePane(activePane);
     },
-    [activePane, navigatePane]
+    [activePane, clearSuppressTimer, navigatePane]
   );
 
   useEffect(() => {
-    if (!isDragging) return;
     const onWindowPointerUp = (e: globalThis.PointerEvent) => finalizeDrag(e.pointerId, e.clientX);
     const onWindowPointerCancel = (e: globalThis.PointerEvent) =>
       finalizeDrag(e.pointerId, e.clientX, true);
@@ -222,7 +228,7 @@ function KioskHub() {
       window.removeEventListener("pointercancel", onWindowPointerCancel);
       window.removeEventListener("blur", onWindowBlur);
     };
-  }, [finalizeDrag, isDragging]);
+  }, [finalizeDrag]);
 
   const handlePointerDown = (event: PointerEvent<HTMLElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -230,6 +236,7 @@ function KioskHub() {
     if (target?.closest("input, select, textarea, [role='slider']")) {
       return;
     }
+    clearSuppressTimer();
     suppressClickRef.current = false;
     dragRef.current = {
       pointerId: event.pointerId,
@@ -248,12 +255,8 @@ function KioskHub() {
     const dy = event.clientY - drag.startY;
     drag.lastX = event.clientX;
 
-    if (Math.hypot(dx, dy) > 12) {
-      suppressClickRef.current = true;
-    }
-
     if (!drag.active) {
-      if (Math.abs(dx) < 24 || Math.abs(dx) <= Math.abs(dy) * 1.25) {
+      if (Math.abs(dx) < 28 || Math.abs(dx) <= Math.abs(dy) * 1.4) {
         return;
       }
       drag.active = true;
@@ -287,6 +290,7 @@ function KioskHub() {
   const handleClickCapture = (event: ReactMouseEvent<HTMLElement>) => {
     if (suppressClickRef.current) {
       suppressClickRef.current = false;
+      clearSuppressTimer();
       event.preventDefault();
       event.stopPropagation();
     }
@@ -355,7 +359,7 @@ function KioskHub() {
       {!daemonState.night_mode.enabled && (
         <nav
           aria-label="Pane navigation"
-          className="pointer-events-none fixed inset-x-0 bottom-3 z-20 flex justify-center gap-2"
+          className="pointer-events-none fixed inset-x-0 bottom-1 z-20 flex justify-center gap-1"
         >
           {([0, 1, 2] as const).map((idx) => (
             <button
@@ -364,10 +368,15 @@ function KioskHub() {
               aria-label={`Go to ${PANE_TITLES[idx]}`}
               aria-current={activePane === idx ? "page" : undefined}
               onClick={() => navigatePane(idx)}
-              className={`pointer-events-auto h-2 rounded-full transition-all ${
-                activePane === idx ? "w-6 bg-white/85" : "w-2 bg-white/30 hover:bg-white/55"
-              }`}
-            />
+              className="touch-target pointer-events-auto flex items-center justify-center rounded-full p-3"
+            >
+              <span
+                aria-hidden="true"
+                className={`h-2 rounded-full transition-all ${
+                  activePane === idx ? "w-6 bg-white/85" : "w-2 bg-white/30 hover:bg-white/55"
+                }`}
+              />
+            </button>
           ))}
         </nav>
       )}

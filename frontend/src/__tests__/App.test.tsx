@@ -184,4 +184,46 @@ describe("Surface Assistant Kiosk UI", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+
+  it("allows noisy fingertip tap (< 28px drift) to launch media while swipe (>= 28px) navigates without launching", async () => {
+    vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
+    vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue(DEFAULT_DAEMON_SNAPSHOT);
+    const launchSpy = vi
+      .spyOn(daemonSocket.daemonApi, "launchMedia")
+      .mockResolvedValue({ ...DEFAULT_DAEMON_SNAPSHOT.media, active_tile_id: "youtube" });
+    vi.stubGlobal("PointerEvent", MouseEvent);
+
+    render(<App />);
+    await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
+    const track = screen.getByLabelText("Bedside Hub Panes");
+
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
+    expect(track.style.transform).toBe("translate3d(calc(-200vw + 0px), 0, 0)");
+
+    const youtubeBtn = screen.getByRole("button", { name: /YouTube/i });
+
+    // Noisy tap with ~18px diagonal pad roll (< 28px threshold) must still fire onClick
+    fireEvent.pointerDown(youtubeBtn, { pointerId: 1, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(youtubeBtn, { pointerId: 1, clientX: 315, clientY: 310 });
+    fireEvent.pointerUp(youtubeBtn, { pointerId: 1, clientX: 315, clientY: 310 });
+    fireEvent.click(youtubeBtn);
+
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+    expect(launchSpy).toHaveBeenCalledWith("youtube");
+    await waitFor(() => expect(screen.getByText("Resume")).toBeInTheDocument());
+    expect(track.style.transform).toBe("translate3d(calc(-200vw + 0px), 0, 0)");
+
+    // Horizontal swipe (>= 28px and > 1.4 * dy) must navigate without launching media
+    launchSpy.mockClear();
+    fireEvent.pointerDown(youtubeBtn, { pointerId: 2, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(youtubeBtn, { pointerId: 2, clientX: 380, clientY: 305 });
+    fireEvent.pointerUp(youtubeBtn, { pointerId: 2, clientX: 380, clientY: 305 });
+    fireEvent.click(youtubeBtn);
+
+    expect(launchSpy).not.toHaveBeenCalled();
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 });
