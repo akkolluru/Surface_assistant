@@ -157,6 +157,21 @@ else
   warn "systemd user linger is not enabled for '${USER}' (run: sudo loginctl enable-linger ${USER})"
 fi
 
+# 9. Sway Kiosk session & Brave window
+shopt -s nullglob
+sway_socks=("${XDG_RUNTIME_DIR}"/sway-ipc.*.sock)
+shopt -u nullglob
+if (( ${#sway_socks[@]} > 0 )) && SWAYSOCK="${sway_socks[0]}" swaymsg -t get_workspaces -r >/dev/null 2>&1; then
+  pass "Sway compositor IPC active (${sway_socks[0]})"
+  if SWAYSOCK="${sway_socks[0]}" swaymsg -t get_tree -r 2>/dev/null | grep -q '"surface-kiosk"'; then
+    pass "Brave kiosk window (surface-kiosk) detected in Sway"
+  else
+    warn "Sway is running, but 'surface-kiosk' window was not detected yet"
+  fi
+else
+  warn "Sway compositor session is not active (GNOME/GDM may still be active until Sway autologin is applied)"
+fi
+
 echo ""
 printf 'Summary: %d passed, %d warned, %d failed\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
 
