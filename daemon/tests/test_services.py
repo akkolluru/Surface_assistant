@@ -247,6 +247,7 @@ def test_sway_backend_passes_resolved_env_to_subprocess(
     assert popen_calls[0][0][0] == "brave-browser"
     assert "--app=https://youtube.com" in popen_calls[0][0]
     assert "--class=surface-media" in popen_calls[0][0]
+    assert "--touch-events=enabled" in popen_calls[0][0]
     assert "--password-store=basic" in popen_calls[0][0]
     assert popen_calls[0][1]["SWAYSOCK"] == str(sway_sock)
     assert popen_calls[0][1]["WAYLAND_DISPLAY"] == "wayland-1"
