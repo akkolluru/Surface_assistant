@@ -6,6 +6,8 @@ set $scripts ~/.local/share/surface-assistant/scripts
 # Display & Touch
 output * scale 1.75
 input type:touch map_to_output eDP-1
+# Disable raw kernel IPTS touch node so Sway uses IPTSD Virtual Touchscreen exclusively
+input "1118:31:IPTS_045E:001F_Touchscreen" events disabled
 input type:touchpad {
   tap enabled
   natural_scroll enabled
@@ -48,12 +50,13 @@ bindsym $mod+1 workspace "1:hub"
 bindsym $mod+2 workspace "2:media"
 
 # Startup session services
-exec systemctl --user import-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS
-exec sh -c 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --systemd WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS || true'
+exec systemctl --user import-environment DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS
+exec sh -c 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS || true'
 exec $scripts/../pipewire-rules/init-sinks.sh
 exec swayosd-server
 exec waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css
 exec kdeconnect-indicator
 
-# Launch Brave Kiosk on Workspace 1 once daemon is listening on 127.0.0.1:8000
-exec sh -c 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=wayland --touch-events=enabled --password-store=basic --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
+# Launch Brave Kiosk on Workspace 1 with an isolated profile so media --app windows
+# run in a separate process and never inherit surface-kiosk's workspace assignment.
+exec sh -c 'mkdir -p "$HOME/.local/share/surface-assistant/kiosk-profile"; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --user-data-dir="$HOME/.local/share/surface-assistant/kiosk-profile" --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=x11 --touch-events=enabled --password-store=basic --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
