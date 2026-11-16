@@ -5,7 +5,11 @@ set $scripts ~/.local/share/surface-assistant/scripts
 
 # Display & Touch
 output * scale 1.75
-input type:touch map_to_output *
+input type:touch map_to_output eDP-1
+input type:touchpad {
+  tap enabled
+  natural_scroll enabled
+}
 seat * hide_cursor 3000
 
 # Keep display awake (Smart Night Mode handles dark-room dimming via backlight)
@@ -26,6 +30,8 @@ for_window [app_id="surface-kiosk"] fullscreen enable
 for_window [class="surface-kiosk"] fullscreen enable
 for_window [app_id="surface-media"] move to workspace "2:media", fullscreen enable
 for_window [class="surface-media"] move to workspace "2:media", fullscreen enable
+for_window [app_id="^brave-.*"] move to workspace "2:media", fullscreen enable
+for_window [app_id="com.stremio.Stremio"] move to workspace "2:media", fullscreen enable
 for_window [class="Stremio"] move to workspace "2:media", fullscreen enable
 for_window [app_id="stremio"] move to workspace "2:media", fullscreen enable
 
@@ -50,4 +56,4 @@ exec waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css
 exec kdeconnect-indicator
 
 # Launch Brave Kiosk on Workspace 1 once daemon is listening on 127.0.0.1:8000
-exec sh -c 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=wayland --password-store=basic --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
+exec sh -c 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break; sleep 0.5; done; exec brave-browser --kiosk http://127.0.0.1:8000 --class=surface-kiosk --ozone-platform=wayland --touch-events=enabled --password-store=basic --enable-features=VaapiVideoDecoder --overscroll-history-navigation=0 --disable-pinch --no-first-run --disable-session-crashed-bubble'
