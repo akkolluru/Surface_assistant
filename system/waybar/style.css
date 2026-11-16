@@ -21,10 +21,17 @@ window#waybar {
   color: rgba(255, 255, 255, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
-  font-size: 16px;
-  padding: 10px 20px;
+  min-width: 120px;
+  min-height: 44px;
+  font-size: 17px;
+  padding: 12px 24px;
 }
 
 #custom-home.visible:hover {
   background: rgba(36, 36, 44, 0.8);
+}
+
+#custom-home.visible:active {
+  background: rgba(64, 64, 78, 0.92);
+  border-color: rgba(255, 255, 255, 0.45);
 }

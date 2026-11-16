@@ -54,7 +54,7 @@ exec systemctl --user import-environment DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CU
 exec sh -c 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS || true'
 exec $scripts/../pipewire-rules/init-sinks.sh
 exec swayosd-server
-exec waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css
+exec sh -c 'pkill -x waybar 2>/dev/null || true; exec env GTK_TEST_TOUCHSCREEN=1 waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css'
 exec kdeconnect-indicator
 
 # Launch Brave Kiosk on Workspace 1 with an isolated profile so media --app windows
