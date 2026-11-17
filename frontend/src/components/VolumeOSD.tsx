@@ -63,7 +63,7 @@ export function VolumeOSD({ open, audio, onClose, onChangeLevel }: VolumeOSDProp
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-6 pt-6 pb-12 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -71,9 +71,9 @@ export function VolumeOSD({ open, audio, onClose, onChangeLevel }: VolumeOSDProp
         aria-modal="true"
         aria-labelledby="volume-osd-title"
         onClick={(e) => e.stopPropagation()}
-        className="glass-panel w-full max-w-md rounded-3xl p-6 shadow-2xl"
+        className="glass-panel w-full max-w-4xl rounded-3xl p-6 shadow-2xl"
       >
-        <div className="mb-5 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <Volume2 className="h-5 w-5 text-sky-300" aria-hidden="true" />
             <h2 id="volume-osd-title" className="text-lg font-semibold text-white">
@@ -90,7 +90,7 @@ export function VolumeOSD({ open, audio, onClose, onChangeLevel }: VolumeOSDProp
           </button>
         </div>
 
-        <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {rows.map(({ channel, label, subtitle, percent, muted, max, Icon }) => (
             <div key={channel} className="rounded-2xl bg-white/5 p-3.5">
               <div className="mb-2 flex items-center justify-between">

@@ -136,35 +136,10 @@ export function AmbientHubPane({
         </div>
       )}
 
-      {/* Top Row: Subtle Pane Navigation Hints (hidden in Night Mode unless peeked) */}
-      <div
-        className={`relative z-10 flex items-center justify-between transition-opacity duration-500 ${
-          isNight && !nightPeek ? "pointer-events-none opacity-0" : "opacity-100"
-        }`}
-      >
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onNavigatePane(0);
-          }}
-          className="glass-panel touch-target rounded-full px-4 py-1.5 text-xs font-medium text-white/75 hover:bg-white/15"
-        >
-          ← Controls
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onNavigatePane(2);
-          }}
-          className="glass-panel touch-target rounded-full px-4 py-1.5 text-xs font-medium text-white/75 hover:bg-white/15"
-        >
-          Media →
-        </button>
-      </div>
+      {/* Top Spacer: Keeps upper canvas unobstructed for ambient art */}
+      <div aria-hidden="true" className="pointer-events-none h-4" />
 
-      {/* Bottom / Primary Display Row */}
+      {/* Bottom / Primary Display Row (all interactive controls anchored in lower working touch zone) */}
       <div className="relative z-10 mt-auto flex flex-col justify-between gap-6 md:flex-row md:items-end">
         {/* Clock, Date & Weather */}
         <div
@@ -219,6 +194,28 @@ export function AmbientHubPane({
           {!isNight && <DevicePill devices={state.devices} />}
 
           <div className="relative flex flex-wrap items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onNavigatePane(0);
+              }}
+              className="glass-panel touch-target rounded-full px-3.5 py-2 text-xs font-medium text-white/80 hover:bg-white/15"
+            >
+              ← Controls
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onNavigatePane(2);
+              }}
+              className="glass-panel touch-target rounded-full px-3.5 py-2 text-xs font-medium text-white/80 hover:bg-white/15"
+            >
+              Media →
+            </button>
+
             {sleepMenuOpen && (
               <div
                 role="menu"
