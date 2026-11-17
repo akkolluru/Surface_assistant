@@ -112,11 +112,14 @@ class SwayCompositorBackend:
 
     def _resolve_wayland_display(self) -> str | None:
         """Resolve WAYLAND_DISPLAY from env or active Wayland sockets in runtime_dir."""
+        runtime_dir = self._resolve_runtime_dir()
         existing = os.environ.get("WAYLAND_DISPLAY", "").strip()
         if existing:
-            return existing
+            candidate = Path(existing) if Path(existing).is_absolute() else runtime_dir / existing
+            if candidate.exists():
+                return existing
         sock = self._newest_matching_file(
-            self._resolve_runtime_dir(),
+            runtime_dir,
             "wayland-[0-9]*",
             predicate=lambda p: not p.name.endswith(".lock")
             and p.name.removeprefix("wayland-").isdigit(),
@@ -127,7 +130,9 @@ class SwayCompositorBackend:
         """Resolve X11/XWayland DISPLAY from env or /tmp/.X11-unix sockets."""
         existing = os.environ.get("DISPLAY", "").strip()
         if existing:
-            return existing
+            display_num = existing.lstrip(":").split(".", 1)[0]
+            if display_num.isdigit() and (self._x11_unix_dir / f"X{display_num}").exists():
+                return existing
         sock = self._newest_matching_file(
             self._x11_unix_dir,
             "X[0-9]*",
@@ -164,11 +169,14 @@ class SwayCompositorBackend:
     def launch_tile(self, tile: MediaTileConfig, browser_bin: str) -> None:
         self.focus_workspace("2:media")
         if tile.kind == "browser_app":
+            media_profile_dir = Path.home() / ".local/share/surface-assistant/media-profile"
+            media_profile_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
                 browser_bin,
+                f"--user-data-dir={media_profile_dir}",
                 f"--app={tile.target}",
                 "--class=surface-media",
-                "--ozone-platform=x11",
+                "--ozone-platform=wayland",
                 "--touch-events=enabled",
                 "--password-store=basic",
                 "--enable-features=VaapiVideoDecoder",
@@ -207,6 +215,7 @@ class SwayCompositorBackend:
                 check=False,
                 capture_output=True,
                 timeout=2.0,
+                env=self._build_env(),
             )
         except OSError as err:
             _LOGGER.debug("playerctl pause unavailable: %s", err)

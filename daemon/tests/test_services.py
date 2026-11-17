@@ -176,6 +176,7 @@ def test_sway_backend_respects_existing_env_vars(
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
     (runtime_dir / "sway-ipc.1000.999.sock").touch()
+    (runtime_dir / "wayland-0").touch()
     (runtime_dir / "wayland-1").touch()
 
     custom_sock = tmp_path / "custom-sway.sock"
@@ -188,6 +189,9 @@ def test_sway_backend_respects_existing_env_vars(
 
     assert env["SWAYSOCK"] == str(custom_sock)
     assert env["WAYLAND_DISPLAY"] == "wayland-0"
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-99")
+    assert backend._build_env()["WAYLAND_DISPLAY"] == "wayland-1"
 
 
 def test_sway_backend_passes_resolved_env_to_subprocess(
@@ -221,6 +225,7 @@ def test_sway_backend_passes_resolved_env_to_subprocess(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     backend = SwayCompositorBackend(runtime_dir=tmp_path)
     backend.launch_tile(
@@ -251,8 +256,11 @@ def test_sway_backend_passes_resolved_env_to_subprocess(
 
     assert len(popen_calls) == 2
     assert popen_calls[0][0][0] == "brave-browser"
+    expected_profile = tmp_path / ".local/share/surface-assistant/media-profile"
+    assert f"--user-data-dir={expected_profile}" in popen_calls[0][0]
     assert "--app=https://youtube.com" in popen_calls[0][0]
     assert "--class=surface-media" in popen_calls[0][0]
+    assert "--ozone-platform=wayland" in popen_calls[0][0]
     assert "--touch-events=enabled" in popen_calls[0][0]
     assert "--password-store=basic" in popen_calls[0][0]
     assert popen_calls[0][1]["SWAYSOCK"] == str(sway_sock)

@@ -114,8 +114,9 @@ class DaemonRuntime:
         )
 
     async def broadcast_state(self) -> None:
+        snap = await asyncio.to_thread(self.snapshot)
         await self.ws_manager.broadcast(
-            DaemonEvent(type="state", payload=self.snapshot().model_dump())
+            DaemonEvent(type="state", payload=snap.model_dump())
         )
 
 
@@ -178,7 +179,12 @@ async def _sleep_timer_loop(runtime: DaemonRuntime) -> None:
         await asyncio.sleep(1.0)
         had_timer = runtime.media.state.sleep_timer_remaining_seconds is not None
         expired = runtime.media.tick_sleep_timer()
-        if expired or had_timer:
+        remaining = runtime.media.state.sleep_timer_remaining_seconds
+        if expired or (
+            had_timer
+            and remaining is not None
+            and (remaining <= 10 or remaining % 15 == 0)
+        ):
             await runtime.broadcast_state()
 
 
