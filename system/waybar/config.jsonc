@@ -9,6 +9,6 @@
   "custom/home": {
     "exec": "~/.local/share/surface-assistant/scripts/waybar-home-state.sh",
     "return-type": "json",
-    "on-click-release": "~/.local/share/surface-assistant/scripts/return-home.sh"
+    "on-click": "~/.local/share/surface-assistant/scripts/return-home.sh"
   }
 }

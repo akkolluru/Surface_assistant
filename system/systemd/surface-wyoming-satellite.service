@@ -6,7 +6,7 @@ Requires=pipewire-pulse.service
 [Service]
 Type=simple
 Environment=PULSE_SINK=tts-sink
-ExecStart=%h/.local/share/surface-assistant/wyoming-venv/bin/wyoming-satellite \
+ExecStart=%h/.local/share/surface-assistant/wyoming-venv/bin/python -m wyoming_satellite \
   --name "Surface Bedside Hub" \
   --uri tcp://0.0.0.0:10700 \
   --mic-command "parec --rate=16000 --channels=1 --format=s16le --raw" \

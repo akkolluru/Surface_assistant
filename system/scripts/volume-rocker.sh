@@ -27,22 +27,25 @@ fi
 
 case "${ACTION}" in
   up)
+    if command -v swayosd-client >/dev/null 2>&1 \
+      && swayosd-client --device "${SINK_TARGET}" --output-volume raise --max-volume 100 >/dev/null 2>&1; then
+      exit 0
+    fi
     pactl set-sink-mute "${SINK_TARGET}" 0
     pactl set-sink-volume "${SINK_TARGET}" +5%
-    if command -v swayosd-client >/dev/null 2>&1; then
-      swayosd-client --output-volume raise >/dev/null 2>&1 || true
-    fi
     ;;
   down)
-    pactl set-sink-volume "${SINK_TARGET}" -5%
-    if command -v swayosd-client >/dev/null 2>&1; then
-      swayosd-client --output-volume lower >/dev/null 2>&1 || true
+    if command -v swayosd-client >/dev/null 2>&1 \
+      && swayosd-client --device "${SINK_TARGET}" --output-volume lower --max-volume 100 >/dev/null 2>&1; then
+      exit 0
     fi
+    pactl set-sink-volume "${SINK_TARGET}" -5%
     ;;
   mute)
-    pactl set-sink-mute "${SINK_TARGET}" toggle
-    if command -v swayosd-client >/dev/null 2>&1; then
-      swayosd-client --output-volume mute-toggle >/dev/null 2>&1 || true
+    if command -v swayosd-client >/dev/null 2>&1 \
+      && swayosd-client --device "${SINK_TARGET}" --output-volume mute-toggle >/dev/null 2>&1; then
+      exit 0
     fi
+    pactl set-sink-mute "${SINK_TARGET}" toggle
     ;;
 esac

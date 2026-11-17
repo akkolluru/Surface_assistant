@@ -157,19 +157,43 @@ else
   warn "systemd user linger is not enabled for '${USER}' (run: sudo loginctl enable-linger ${USER})"
 fi
 
-# 9. Sway Kiosk session & Brave window
+# 9. Sway Kiosk session, touchscreen & Brave window
 shopt -s nullglob
 sway_socks=("${XDG_RUNTIME_DIR}"/sway-ipc.*.sock)
 shopt -u nullglob
 if (( ${#sway_socks[@]} > 0 )) && SWAYSOCK="${sway_socks[0]}" swaymsg -t get_workspaces -r >/dev/null 2>&1; then
   pass "Sway compositor IPC active (${sway_socks[0]})"
-  if SWAYSOCK="${sway_socks[0]}" swaymsg -t get_tree -r 2>/dev/null | grep -q '"surface-kiosk"'; then
-    pass "Brave kiosk window (surface-kiosk) detected in Sway"
+  kiosk_tree="$(SWAYSOCK="${sway_socks[0]}" swaymsg -t get_tree -r 2>/dev/null || true)"
+  if grep -q '"surface-kiosk"' <<< "${kiosk_tree}"; then
+    if grep -q '"app_id": "surface-kiosk"' <<< "${kiosk_tree}"; then
+      pass "Brave kiosk window (surface-kiosk) running on native Wayland (xdg_shell)"
+    else
+      warn "Brave kiosk window detected, but not on native Wayland app_id (XWayland fallback)"
+    fi
   else
     warn "Sway is running, but 'surface-kiosk' window was not detected yet"
   fi
+
+  inputs_json="$(SWAYSOCK="${sway_socks[0]}" swaymsg -t get_inputs -r 2>/dev/null || true)"
+  if grep -q 'IPTSD_Virtual_Touchscreen' <<< "${inputs_json}"; then
+    pass "IPTSD Virtual Touchscreen registered in Sway"
+  else
+    fail "IPTSD Virtual Touchscreen missing from Sway inputs"
+  fi
+
+  if pgrep -x waybar >/dev/null 2>&1; then
+    pass "waybar overlay process is running"
+  else
+    warn "waybar is not running"
+  fi
 else
   warn "Sway compositor session is not active (GNOME/GDM may still be active until Sway autologin is applied)"
+fi
+
+if systemctl list-units 'iptsd@*.service' --state=active --no-legend 2>/dev/null | grep -q 'iptsd@'; then
+  pass "iptsd templated touch service is active"
+else
+  warn "iptsd@*.service is not active"
 fi
 
 echo ""

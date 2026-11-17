@@ -12,6 +12,7 @@ SURFACE_HOST="${SURFACE_HOST:-192.168.0.100}"
 SURFACE_DIR="${SURFACE_DIR:-~/Surface_assistant}"
 
 RESTART=false
+SYNC_SYSTEM=false
 DRY_RUN=false
 
 usage() {
@@ -21,9 +22,10 @@ Usage: ./scripts/deploy-surface.sh [OPTIONS]
 Sync the repository from Mac to the Surface Pro 5 using rsync over SSH.
 
 Options:
-  --restart    Run `systemctl --user restart surface-daemon.service` over SSH after sync
-  --dry-run    Pass --dry-run to rsync and print (do not run) remote commands
-  -h, --help   Show this help message and exit
+  --sync-system  Install Sway, Waybar, PipeWire, systemd user units, and helper scripts on Surface
+  --restart      Run `systemctl --user restart surface-daemon.service` over SSH after sync
+  --dry-run      Pass --dry-run to rsync and print (do not run) remote commands
+  -h, --help     Show this help message and exit
 
 Environment Variables:
   SURFACE_USER   SSH username (default: time-master)
@@ -34,6 +36,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --sync-system)
+      SYNC_SYSTEM=true
+      shift
+      ;;
     --restart)
       RESTART=true
       shift
@@ -67,7 +73,7 @@ if [[ "${SURFACE_DIR}" == "~" ]]; then
   REMOTE_MKDIR_CMD='mkdir -p "$HOME"'
   REMOTE_RSYNC_PATH='./'
 elif [[ "${SURFACE_DIR}" == "~/"* ]]; then
-  REL_DIR="${SURFACE_DIR#~/}"
+  REL_DIR="${SURFACE_DIR#\~/}"
   printf -v ESCAPED_REL_DIR '%q' "${REL_DIR}"
   REMOTE_MKDIR_CMD="mkdir -p \"\$HOME\"/${ESCAPED_REL_DIR}"
   REMOTE_RSYNC_PATH="${ESCAPED_REL_DIR}/"
@@ -102,6 +108,10 @@ RSYNC_ARGS=(
   --exclude='openwakeword-data/'
 )
 
+if [[ ! -f "${REPO_ROOT}/frontend/dist/index.html" ]]; then
+  RSYNC_ARGS+=(--exclude='frontend/dist/')
+fi
+
 if [[ "${DRY_RUN}" == "true" ]]; then
   RSYNC_ARGS+=(--dry-run)
 fi
@@ -115,6 +125,47 @@ else
 fi
 
 rsync "${RSYNC_ARGS[@]}" "${REPO_ROOT}/" "${REMOTE_TARGET}:${REMOTE_RSYNC_PATH}"
+
+if [[ "${SYNC_SYSTEM}" == "true" ]]; then
+  if [[ "${SURFACE_DIR}" == "~" ]]; then
+    REMOTE_REPO_EXPR='"$HOME"'
+  elif [[ "${SURFACE_DIR}" == "~/"* ]]; then
+    REMOTE_REPO_EXPR="\"\$HOME\"/${ESCAPED_REL_DIR}"
+  else
+    REMOTE_REPO_EXPR="${ESCAPED_DIR}"
+  fi
+  SYNC_CMD='set -euo pipefail
+REPO_DIR='"${REMOTE_REPO_EXPR}"'
+DATA_DIR="$HOME/.local/share/surface-assistant"
+mkdir -p "$HOME/.config/sway" "$HOME/.config/waybar" "$HOME/.config/pipewire/pipewire.conf.d" "$HOME/.config/systemd/user" "$DATA_DIR/scripts" "$DATA_DIR/pipewire-rules"
+cp "$REPO_DIR/system/sway/config" "$HOME/.config/sway/config"
+cp "$REPO_DIR/system/waybar/config.jsonc" "$HOME/.config/waybar/config.jsonc"
+cp "$REPO_DIR/system/waybar/style.css" "$HOME/.config/waybar/style.css"
+cp "$REPO_DIR/system/pipewire-rules/50-surface-sinks.conf" "$HOME/.config/pipewire/pipewire.conf.d/50-surface-sinks.conf"
+cp "$REPO_DIR/system/pipewire-rules/init-sinks.sh" "$DATA_DIR/pipewire-rules/init-sinks.sh"
+cp "$REPO_DIR/system/scripts/"*.sh "$DATA_DIR/scripts/"
+chmod +x "$DATA_DIR/pipewire-rules/init-sinks.sh" "$DATA_DIR/scripts/"*.sh
+cp "$REPO_DIR/system/systemd/surface-daemon.service" "$HOME/.config/systemd/user/surface-daemon.service"
+cp "$REPO_DIR/system/systemd/surface-wyoming-satellite.service" "$HOME/.config/systemd/user/surface-wyoming-satellite.service"
+systemctl --user daemon-reload
+if sudo -n true 2>/dev/null; then
+  sudo mkdir -p /etc/iptsd.d
+  sudo cp "$REPO_DIR/system/iptsd/90-touch-calibration.conf" /etc/iptsd.d/90-touch-calibration.conf
+  sudo systemctl try-restart "iptsd@*" || true
+else
+  echo "Note: skipped /etc/iptsd.d/90-touch-calibration.conf (passwordless sudo unavailable); copy manually if changed."
+fi
+SWAYSOCK_FOUND="$(ls -t "/run/user/$(id -u)"/sway-ipc.*.sock 2>/dev/null | head -n 1 || true)"
+if [[ -n "$SWAYSOCK_FOUND" ]]; then
+  SWAYSOCK="$SWAYSOCK_FOUND" swaymsg reload >/dev/null 2>&1 || true
+fi'
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "[dry-run] Would sync system configs/units on ${REMOTE_TARGET}"
+  else
+    echo "Syncing system configs and user units on ${REMOTE_TARGET}..."
+    ssh "${REMOTE_TARGET}" "${SYNC_CMD}"
+  fi
+fi
 
 if [[ "${RESTART}" == "true" ]]; then
   RESTART_CMD="systemctl --user restart surface-daemon.service"
