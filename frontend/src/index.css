@@ -17,20 +17,27 @@ body,
   overscroll-behavior-x: none;
 }
 
-.pane-track {
-  display: flex;
-  width: 300vw;
-  height: 100vh;
-  will-change: transform;
-  touch-action: pan-y;
-}
+@layer components {
+  .pane-track {
+    display: flex;
+    width: 300vw;
+    height: 100vh;
+    will-change: transform;
+    touch-action: pan-y;
+  }
 
-.pane-item {
-  flex: 0 0 100vw;
-  width: 100vw;
-  height: 100vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  .pane-item {
+    flex: 0 0 100vw;
+    width: 100vw;
+    height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .pane-no-scroll {
+    overflow: hidden;
+    touch-action: none;
+  }
 }
 
 button,
@@ -50,7 +57,7 @@ a {
   min-height: 44px;
 }
 
-@media (pointer: coarse) {
+@media (pointer: coarse), (any-pointer: coarse) {
   .touch-target {
     min-width: 48px;
     min-height: 48px;

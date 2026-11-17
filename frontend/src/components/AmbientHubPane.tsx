@@ -49,6 +49,7 @@ export function AmbientHubPane({
   const [now, setNow] = useState<Date>(() => new Date());
   const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
   const [nightPeek, setNightPeek] = useState(false);
+  const [nightPeekTick, setNightPeekTick] = useState(0);
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 15000);
@@ -58,12 +59,31 @@ export function AmbientHubPane({
   useEffect(() => {
     if (!state.night_mode.enabled) {
       setNightPeek(false);
+      setSleepMenuOpen(false);
       return;
     }
-    if (!nightPeek) return;
+    if (!nightPeek) {
+      setSleepMenuOpen(false);
+      return;
+    }
     const timer = window.setTimeout(() => setNightPeek(false), 8000);
     return () => window.clearTimeout(timer);
-  }, [state.night_mode.enabled, nightPeek]);
+  }, [state.night_mode.enabled, nightPeek, nightPeekTick]);
+
+  useEffect(() => {
+    if (!sleepMenuOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSleepMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sleepMenuOpen]);
+
+  const bumpNightPeek = () => {
+    if (state.night_mode.enabled && nightPeek) {
+      setNightPeekTick((n) => n + 1);
+    }
+  };
 
   const activeWallpaper = state.wallpapers.items[state.wallpapers.current_index];
   const { time, period } = formatClock(now, state.clock_format);
@@ -81,9 +101,12 @@ export function AmbientHubPane({
     <section
       aria-label="Ambient Hub"
       onClick={() => {
+        if (sleepMenuOpen) {
+          setSleepMenuOpen(false);
+        }
         if (isNight) setNightPeek((prev) => !prev);
       }}
-      className="pane-item relative flex h-full w-full flex-col justify-between overflow-hidden bg-black p-8 md:p-10"
+      className="pane-item pane-no-scroll relative flex h-full w-full flex-col justify-between overflow-hidden bg-black p-8 md:p-10"
     >
       {/* Background Art / Looping MP4 Canvas (hidden in Night Mode) */}
       {!isNight && activeWallpaper && (
@@ -184,7 +207,11 @@ export function AmbientHubPane({
 
         {/* Lower-Right Controls (reachable from left-of-bed placement) */}
         <div
-          onClick={(e) => e.stopPropagation()}
+          onPointerDown={bumpNightPeek}
+          onClick={(e) => {
+            e.stopPropagation();
+            bumpNightPeek();
+          }}
           className={`flex flex-col items-end gap-3 transition-opacity duration-300 ${
             isNight && !nightPeek ? "pointer-events-none opacity-0" : "opacity-100"
           }`}

@@ -71,35 +71,43 @@ export class HaClient {
 
   async connect(): Promise<() => void> {
     let disposed = false;
-    try {
-      const resp = await fetch("/api/ha-config");
-      if (!resp.ok) {
-        this.onUpdate(this.entities, false);
-        return () => {
-          disposed = true;
-        };
-      }
-      const cfg = (await resp.json()) as { url: string; token: string };
-      if (!cfg.token || disposed) {
-        this.onUpdate(this.entities, false);
-        return () => {
-          disposed = true;
-        };
-      }
+    let retryTimer: number | null = null;
+    let backoffMs = 1500;
 
-      const wsUrl = cfg.url.replace(/^http/, "ws") + "/api/websocket";
+    const clearRetry = () => {
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const openSocket = (wsUrl: string, token: string) => {
+      if (disposed) return;
       const ws = new WebSocket(wsUrl);
       this.socket = ws;
 
       ws.onmessage = (event) => {
         if (disposed) return;
-        const msg = JSON.parse(String(event.data)) as HaSocketMessage;
+        let msg: HaSocketMessage;
+        try {
+          msg = JSON.parse(String(event.data)) as HaSocketMessage;
+        } catch {
+          return;
+        }
         if (msg.type === "auth_required") {
-          ws.send(JSON.stringify({ type: "auth", access_token: cfg.token }));
+          ws.send(JSON.stringify({ type: "auth", access_token: token }));
+          return;
+        }
+        if (msg.type === "auth_invalid") {
+          disposed = true;
+          this.connected = false;
+          this.onUpdate(this.entities, false);
+          ws.close();
           return;
         }
         if (msg.type === "auth_ok") {
           this.connected = true;
+          backoffMs = 1500;
           ws.send(JSON.stringify({ id: this.nextId++, type: "get_states" }));
           ws.send(
             JSON.stringify({
@@ -145,16 +153,52 @@ export class HaClient {
         }
       };
 
+      ws.onerror = () => {
+        ws.close();
+      };
+
       ws.onclose = () => {
         this.connected = false;
+        if (this.socket === ws) {
+          this.socket = null;
+        }
         this.onUpdate(this.entities, false);
+        if (!disposed) {
+          clearRetry();
+          const delay = backoffMs;
+          backoffMs = Math.min(backoffMs * 2, 30000);
+          retryTimer = window.setTimeout(() => openSocket(wsUrl, token), delay);
+        }
       };
+    };
+
+    try {
+      const resp = await fetch("/api/ha-config");
+      if (!resp.ok) {
+        this.onUpdate(this.entities, false);
+        return () => {
+          disposed = true;
+          clearRetry();
+        };
+      }
+      const cfg = (await resp.json()) as { url: string; token: string };
+      if (!cfg.token || disposed) {
+        this.onUpdate(this.entities, false);
+        return () => {
+          disposed = true;
+          clearRetry();
+        };
+      }
+
+      const wsUrl = cfg.url.replace(/^http/, "ws") + "/api/websocket";
+      openSocket(wsUrl, cfg.token);
     } catch {
       this.onUpdate(this.entities, false);
     }
 
     return () => {
       disposed = true;
+      clearRetry();
       this.socket?.close();
     };
   }

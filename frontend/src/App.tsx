@@ -41,6 +41,8 @@ function KioskHub() {
 
   const haClientRef = useRef<HaClient | null>(null);
   const osdTimerRef = useRef<number | null>(null);
+  const osdAutoCloseRef = useRef(false);
+  const volumeOpenRef = useRef(false);
   const suppressTimerRef = useRef<number | null>(null);
   const trackRef = useRef<HTMLElement>(null);
   const suppressClickRef = useRef(false);
@@ -49,8 +51,24 @@ function KioskHub() {
     startX: number;
     startY: number;
     lastX: number;
+    lastY: number;
     active: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    volumeOpenRef.current = volumeOpen;
+  }, [volumeOpen]);
+
+  const scheduleOsdAutoClose = useCallback(() => {
+    if (osdTimerRef.current !== null) {
+      window.clearTimeout(osdTimerRef.current);
+    }
+    osdTimerRef.current = window.setTimeout(() => {
+      osdAutoCloseRef.current = false;
+      osdTimerRef.current = null;
+      setVolumeOpen(false);
+    }, 5000);
+  }, []);
 
   const navigatePane = useCallback((index: 0 | 1 | 2) => {
     setDragOffsetPx(0);
@@ -65,10 +83,11 @@ function KioskHub() {
   // Connect Daemon REST + WebSocket
   useEffect(() => {
     let active = true;
+    let hasLiveState = false;
     daemonApi
       .fetchState()
       .then((snap) => {
-        if (active) setDaemonState(snap);
+        if (active && !hasLiveState) setDaemonState(snap);
       })
       .catch(() => {
         // Keep DEFAULT_DAEMON_SNAPSHOT when running frontend standalone
@@ -77,12 +96,15 @@ function KioskHub() {
     const disconnect = connectDaemonSocket({
       onEvent: (event) => {
         if (event.type === "state") {
+          hasLiveState = true;
           setDaemonState(event.payload);
         } else if (event.type === "osd") {
           setDaemonState((prev) => ({ ...prev, audio: event.payload.audio }));
-          setVolumeOpen(true);
-          if (osdTimerRef.current !== null) window.clearTimeout(osdTimerRef.current);
-          osdTimerRef.current = window.setTimeout(() => setVolumeOpen(false), 5000);
+          if (!volumeOpenRef.current || osdAutoCloseRef.current) {
+            osdAutoCloseRef.current = true;
+            setVolumeOpen(true);
+            scheduleOsdAutoClose();
+          }
         } else if (event.type === "toast") {
           setToastMessage(event.payload.message);
         }
@@ -94,20 +116,30 @@ function KioskHub() {
       if (osdTimerRef.current !== null) window.clearTimeout(osdTimerRef.current);
       disconnect();
     };
-  }, []);
+  }, [scheduleOsdAutoClose]);
 
   // Connect Home Assistant WebSocket (or fall back cleanly to template mode)
   useEffect(() => {
+    let disposed = false;
     const client = new HaClient((entities, live) => {
-      setHaEntities(entities);
-      setHaConnected(live);
+      if (!disposed) {
+        setHaEntities(entities);
+        setHaConnected(live);
+      }
     });
     haClientRef.current = client;
     let cleanup: (() => void) | undefined;
     client.connect().then((fn) => {
-      cleanup = fn;
+      if (disposed) {
+        fn();
+      } else {
+        cleanup = fn;
+      }
     });
-    return () => cleanup?.();
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -120,7 +152,9 @@ function KioskHub() {
     channel: AudioChannel,
     payload: { percent?: number; muted?: boolean }
   ) => {
-    if (osdTimerRef.current !== null) window.clearTimeout(osdTimerRef.current);
+    if (osdAutoCloseRef.current) {
+      scheduleOsdAutoClose();
+    }
     setDaemonState((prev) => ({
       ...prev,
       audio: {
@@ -174,12 +208,13 @@ function KioskHub() {
   useEffect(() => clearSuppressTimer, [clearSuppressTimer]);
 
   const finalizeDrag = useCallback(
-    (pointerId: number | null, finalX?: number, canceled = false) => {
+    (pointerId: number | null, finalX?: number, canceled = false, finalY?: number) => {
       const drag = dragRef.current;
       if (!drag) return;
       if (pointerId !== null && drag.pointerId !== pointerId) return;
 
       const dx = (finalX ?? drag.lastX) - drag.startX;
+      const dy = (finalY ?? drag.lastY) - drag.startY;
       const wasActive = drag.active;
       dragRef.current = null;
 
@@ -191,8 +226,19 @@ function KioskHub() {
         // Ignore capture release errors in synthetic environments
       }
 
-      if (!wasActive) {
+      // Handle fast flicks where pointerup arrives before intermediate pointermove crossed 28px
+      const isFastFlick =
+        !wasActive &&
+        !canceled &&
+        Math.abs(dx) > 60 &&
+        Math.abs(dx) > Math.abs(dy) * 1.4;
+
+      if (!wasActive && !isFastFlick) {
         return;
+      }
+
+      if (isFastFlick) {
+        suppressClickRef.current = true;
       }
 
       clearSuppressTimer();
@@ -215,9 +261,10 @@ function KioskHub() {
   );
 
   useEffect(() => {
-    const onWindowPointerUp = (e: globalThis.PointerEvent) => finalizeDrag(e.pointerId, e.clientX);
+    const onWindowPointerUp = (e: globalThis.PointerEvent) =>
+      finalizeDrag(e.pointerId, e.clientX, false, e.clientY);
     const onWindowPointerCancel = (e: globalThis.PointerEvent) =>
-      finalizeDrag(e.pointerId, e.clientX, true);
+      finalizeDrag(e.pointerId, e.clientX, true, e.clientY);
     const onWindowBlur = () => finalizeDrag(null, undefined, true);
 
     window.addEventListener("pointerup", onWindowPointerUp);
@@ -232,17 +279,22 @@ function KioskHub() {
 
   const handlePointerDown = (event: PointerEvent<HTMLElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (event.isPrimary === false) return;
+    if (dragRef.current !== null) return;
+
+    clearSuppressTimer();
+    suppressClickRef.current = false;
+
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, select, textarea, [role='slider']")) {
       return;
     }
-    clearSuppressTimer();
-    suppressClickRef.current = false;
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       lastX: event.clientX,
+      lastY: event.clientY,
       active: false,
     };
   };
@@ -254,6 +306,7 @@ function KioskHub() {
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
     drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
 
     if (!drag.active) {
       if (Math.abs(dx) < 28 || Math.abs(dx) <= Math.abs(dy) * 1.4) {
@@ -276,7 +329,7 @@ function KioskHub() {
   };
 
   const handlePointerUp = (event: PointerEvent<HTMLElement>) => {
-    finalizeDrag(event.pointerId, event.clientX);
+    finalizeDrag(event.pointerId, event.clientX, false, event.clientY);
   };
 
   const handlePointerCancel = (event: PointerEvent<HTMLElement>) => {
@@ -329,30 +382,61 @@ function KioskHub() {
         onClickCapture={handleClickCapture}
         onKeyDown={handleKeyDown}
       >
-        <SmartHomePane
-          entities={haEntities}
-          haConnected={haConnected}
-          onCallService={(domain, service, data) =>
-            haClientRef.current?.callService(domain, service, data)
-          }
-          onNavigateHub={() => navigatePane(1)}
-        />
+        <div
+          className="h-screen w-screen shrink-0"
+          aria-hidden={activePane !== 0}
+          ref={(el) => {
+            if (el) el.inert = activePane !== 0;
+          }}
+        >
+          <SmartHomePane
+            entities={haEntities}
+            haConnected={haConnected}
+            onCallService={(domain, service, data) =>
+              haClientRef.current?.callService(domain, service, data)
+            }
+            onNavigateHub={() => navigatePane(1)}
+          />
+        </div>
 
-        <AmbientHubPane
-          state={daemonState}
-          onNextWallpaper={handleNextWallpaper}
-          onSetSleepTimer={handleSleepTimer}
-          onToggleNightMode={handleToggleNightMode}
-          onOpenVolume={() => setVolumeOpen(true)}
-          onNavigatePane={navigatePane}
-        />
+        <div
+          className="h-screen w-screen shrink-0"
+          aria-hidden={activePane !== 1}
+          ref={(el) => {
+            if (el) el.inert = activePane !== 1;
+          }}
+        >
+          <AmbientHubPane
+            state={daemonState}
+            onNextWallpaper={handleNextWallpaper}
+            onSetSleepTimer={handleSleepTimer}
+            onToggleNightMode={handleToggleNightMode}
+            onOpenVolume={() => {
+              osdAutoCloseRef.current = false;
+              if (osdTimerRef.current !== null) {
+                window.clearTimeout(osdTimerRef.current);
+                osdTimerRef.current = null;
+              }
+              setVolumeOpen(true);
+            }}
+            onNavigatePane={navigatePane}
+          />
+        </div>
 
-        <MediaLauncher
-          tiles={daemonState.tiles}
-          activeTileId={daemonState.media.active_tile_id}
-          onLaunchTile={handleLaunchMedia}
-          onNavigateHub={() => navigatePane(1)}
-        />
+        <div
+          className="h-screen w-screen shrink-0"
+          aria-hidden={activePane !== 2}
+          ref={(el) => {
+            if (el) el.inert = activePane !== 2;
+          }}
+        >
+          <MediaLauncher
+            tiles={daemonState.tiles}
+            activeTileId={daemonState.media.active_tile_id}
+            onLaunchTile={handleLaunchMedia}
+            onNavigateHub={() => navigatePane(1)}
+          />
+        </div>
       </main>
 
       {/* Bottom Pane Indicator Dots (hidden in Night Mode) */}
@@ -384,7 +468,14 @@ function KioskHub() {
       <VolumeOSD
         open={volumeOpen}
         audio={daemonState.audio}
-        onClose={() => setVolumeOpen(false)}
+        onClose={() => {
+          osdAutoCloseRef.current = false;
+          if (osdTimerRef.current !== null) {
+            window.clearTimeout(osdTimerRef.current);
+            osdTimerRef.current = null;
+          }
+          setVolumeOpen(false);
+        }}
         onChangeLevel={handleAudioChange}
       />
 

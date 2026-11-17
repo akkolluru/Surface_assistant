@@ -145,7 +145,16 @@ describe("Surface Assistant Kiosk UI", () => {
   it("slides smoothly between panes via navigation dots and pointer swipe", async () => {
     vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
     vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue(DEFAULT_DAEMON_SNAPSHOT);
-    vi.stubGlobal("PointerEvent", MouseEvent);
+    class FakePointerEvent extends MouseEvent {
+      pointerId: number;
+      isPrimary: boolean;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+        this.isPrimary = init.isPrimary ?? true;
+      }
+    }
+    vi.stubGlobal("PointerEvent", FakePointerEvent);
 
     render(<App />);
     await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
@@ -191,7 +200,16 @@ describe("Surface Assistant Kiosk UI", () => {
     const launchSpy = vi
       .spyOn(daemonSocket.daemonApi, "launchMedia")
       .mockResolvedValue({ ...DEFAULT_DAEMON_SNAPSHOT.media, active_tile_id: "youtube" });
-    vi.stubGlobal("PointerEvent", MouseEvent);
+    class FakePointerEvent extends MouseEvent {
+      pointerId: number;
+      isPrimary: boolean;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+        this.isPrimary = init.isPrimary ?? true;
+      }
+    }
+    vi.stubGlobal("PointerEvent", FakePointerEvent);
 
     render(<App />);
     await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
@@ -218,6 +236,54 @@ describe("Surface Assistant Kiosk UI", () => {
     fireEvent.pointerDown(youtubeBtn, { pointerId: 2, clientX: 300, clientY: 300 });
     fireEvent.pointerMove(youtubeBtn, { pointerId: 2, clientX: 380, clientY: 305 });
     fireEvent.pointerUp(youtubeBtn, { pointerId: 2, clientX: 380, clientY: 305 });
+    fireEvent.click(youtubeBtn);
+
+    expect(launchSpy).not.toHaveBeenCalled();
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("ignores secondary palm/multi-touch contacts mid-drag and supports fast flicks without intermediate pointermove", async () => {
+    vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
+    vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue(DEFAULT_DAEMON_SNAPSHOT);
+    const launchSpy = vi
+      .spyOn(daemonSocket.daemonApi, "launchMedia")
+      .mockResolvedValue({ ...DEFAULT_DAEMON_SNAPSHOT.media, active_tile_id: "youtube" });
+    class FakePointerEvent extends MouseEvent {
+      pointerId: number;
+      isPrimary: boolean;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+        this.isPrimary = init.isPrimary ?? true;
+      }
+    }
+    vi.stubGlobal("PointerEvent", FakePointerEvent);
+
+    render(<App />);
+    await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
+    const track = screen.getByLabelText("Bedside Hub Panes");
+
+    // Multi-touch / palm contact must not hijack active drag or leave transform stuck
+    fireEvent.pointerDown(track, { pointerId: 1, isPrimary: true, clientX: 400, clientY: 200 });
+    fireEvent.pointerMove(track, { pointerId: 1, isPrimary: true, clientX: 310, clientY: 200 });
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + -90px), 0, 0)");
+
+    // Secondary touch arrives while pointer 1 is dragging, then lifts first
+    fireEvent.pointerDown(track, { pointerId: 2, isPrimary: false, clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(track, { pointerId: 2, isPrimary: false, clientX: 50, clientY: 50 });
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + -90px), 0, 0)");
+
+    // Primary touch completes swipe to Media pane cleanly
+    fireEvent.pointerUp(track, { pointerId: 1, isPrimary: true, clientX: 300, clientY: 200 });
+    expect(track.style.transform).toBe("translate3d(calc(-200vw + 0px), 0, 0)");
+
+    // Fast flick on a tile without intermediate pointermove navigates back without launching media
+    const youtubeBtn = screen.getByRole("button", { name: /YouTube/i });
+    fireEvent.pointerDown(youtubeBtn, { pointerId: 3, isPrimary: true, clientX: 250, clientY: 250 });
+    fireEvent.pointerUp(youtubeBtn, { pointerId: 3, isPrimary: true, clientX: 360, clientY: 255 });
     fireEvent.click(youtubeBtn);
 
     expect(launchSpy).not.toHaveBeenCalled();
