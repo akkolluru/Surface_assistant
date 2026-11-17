@@ -1,10 +1,10 @@
 {
   "layer": "overlay",
-  "position": "top",
+  "position": "bottom",
   "exclusive": false,
   "passthrough": false,
-  "margin-top": 12,
-  "margin-right": 14,
+  "margin-bottom": 20,
+  "margin-right": 20,
   "modules-right": ["custom/home"],
   "custom/home": {
     "exec": "~/.local/share/surface-assistant/scripts/waybar-home-state.sh",
