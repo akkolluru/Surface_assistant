@@ -280,8 +280,19 @@ describe("Surface Assistant Kiosk UI", () => {
     fireEvent.pointerUp(track, { pointerId: 1, isPrimary: true, clientX: 300, clientY: 200 });
     expect(track.style.transform).toBe("translate3d(calc(-200vw + 0px), 0, 0)");
 
-    // Fast flick on a tile without intermediate pointermove navigates back without launching media
+    // Child implicit lostpointercapture bubbling to <main> mid-swipe must NOT abort active drag
     const youtubeBtn = screen.getByRole("button", { name: /YouTube/i });
+    fireEvent.pointerDown(youtubeBtn, { pointerId: 4, isPrimary: true, clientX: 300, clientY: 800 });
+    fireEvent.pointerMove(youtubeBtn, { pointerId: 4, isPrimary: true, clientX: 335, clientY: 800 });
+    // Simulate child losing implicit touch pointer capture when <main> calls setPointerCapture(4)
+    fireEvent(youtubeBtn, new FakePointerEvent("lostpointercapture", { bubbles: true, pointerId: 4 }));
+    // Subsequent pointermove and pointerup on the swipe must still complete pane navigation
+    fireEvent.pointerMove(track, { pointerId: 4, isPrimary: true, clientX: 420, clientY: 800 });
+    fireEvent.pointerUp(track, { pointerId: 4, isPrimary: true, clientX: 420, clientY: 800 });
+    expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+
+    // Fast flick on a tile without intermediate pointermove navigates without launching media
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
     fireEvent.pointerDown(youtubeBtn, { pointerId: 3, isPrimary: true, clientX: 250, clientY: 250 });
     fireEvent.pointerUp(youtubeBtn, { pointerId: 3, isPrimary: true, clientX: 360, clientY: 255 });
     fireEvent.click(youtubeBtn);

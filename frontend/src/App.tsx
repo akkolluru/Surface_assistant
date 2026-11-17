@@ -45,6 +45,9 @@ function KioskHub() {
   const volumeOpenRef = useRef(false);
   const suppressTimerRef = useRef<number | null>(null);
   const trackRef = useRef<HTMLElement>(null);
+  const pane0Ref = useRef<HTMLDivElement>(null);
+  const pane1Ref = useRef<HTMLDivElement>(null);
+  const pane2Ref = useRef<HTMLDivElement>(null);
   const suppressClickRef = useRef(false);
   const dragRef = useRef<{
     pointerId: number;
@@ -78,6 +81,9 @@ function KioskHub() {
 
   useEffect(() => {
     document.title = PANE_TITLES[activePane];
+    if (pane0Ref.current) pane0Ref.current.inert = activePane !== 0;
+    if (pane1Ref.current) pane1Ref.current.inert = activePane !== 1;
+    if (pane2Ref.current) pane2Ref.current.inert = activePane !== 2;
   }, [activePane]);
 
   // Connect Daemon REST + WebSocket
@@ -337,6 +343,7 @@ function KioskHub() {
   };
 
   const handleLostPointerCapture = (event: PointerEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
     finalizeDrag(event.pointerId);
   };
 
@@ -383,11 +390,9 @@ function KioskHub() {
         onKeyDown={handleKeyDown}
       >
         <div
+          ref={pane0Ref}
           className="h-screen w-screen shrink-0"
           aria-hidden={activePane !== 0}
-          ref={(el) => {
-            if (el) el.inert = activePane !== 0;
-          }}
         >
           <SmartHomePane
             entities={haEntities}
@@ -400,11 +405,9 @@ function KioskHub() {
         </div>
 
         <div
+          ref={pane1Ref}
           className="h-screen w-screen shrink-0"
           aria-hidden={activePane !== 1}
-          ref={(el) => {
-            if (el) el.inert = activePane !== 1;
-          }}
         >
           <AmbientHubPane
             state={daemonState}
@@ -424,11 +427,9 @@ function KioskHub() {
         </div>
 
         <div
+          ref={pane2Ref}
           className="h-screen w-screen shrink-0"
           aria-hidden={activePane !== 2}
-          ref={(el) => {
-            if (el) el.inert = activePane !== 2;
-          }}
         >
           <MediaLauncher
             tiles={daemonState.tiles}

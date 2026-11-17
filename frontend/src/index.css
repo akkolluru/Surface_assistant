@@ -23,15 +23,16 @@ body,
     width: 300vw;
     height: 100vh;
     will-change: transform;
-    touch-action: pan-y;
+    touch-action: none;
   }
 
   .pane-item {
     flex: 0 0 100vw;
     width: 100vw;
     height: 100vh;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
   }
 
   .pane-no-scroll {
@@ -42,7 +43,13 @@ body,
 
 button,
 a {
-  touch-action: manipulation;
+  touch-action: none;
+  transition: scale 140ms ease-out;
+}
+
+button:active,
+a:active {
+  scale: 0.98;
 }
 
 .glass-panel {
