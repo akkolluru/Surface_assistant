@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyMagneticDetent,
+  centerFocusWeight,
   clampDragContinuousIndex,
   computeStepDeg,
   defaultInitialIndex,
@@ -9,6 +11,8 @@ import {
   pointerAngleDeg,
   shortestModularDelta,
   slotVisibility,
+  stepCoastFrame,
+  stepUnderdampedSpring,
   wrapTileIndex,
 } from "../components/mediaDialMath";
 
@@ -149,5 +153,97 @@ describe("mediaDialMath", () => {
     // Crossing -175° -> +175° gives raw delta +350°, normalized to -10°
     expect(normalizeAngleDeltaDeg(350)).toBe(-10);
     expect(normalizeAngleDeltaDeg(540)).toBe(180);
+  });
+
+  it("applies magnetic detent pull toward slots while preserving integers and bounded edges", () => {
+    expect(applyMagneticDetent(1.2, 0)).toBe(0);
+
+    // Exact identity at integer slot centers
+    for (let idx = 0; idx < 5; idx += 1) {
+      expect(applyMagneticDetent(idx, 5)).toBeCloseTo(idx, 12);
+    }
+
+    // Strictly monotonically increasing across circular range
+    let prev = -Infinity;
+    for (let step = -10; step <= 110; step += 1) {
+      const val = applyMagneticDetent(step * 0.05, 5);
+      expect(val).toBeGreaterThan(prev);
+      prev = val;
+    }
+
+    // Pulls toward nearest integer within ±0.25
+    const above = applyMagneticDetent(1.15, 5);
+    expect(above).toBeGreaterThan(1);
+    expect(above).toBeLessThan(1.15);
+
+    const below = applyMagneticDetent(0.85, 5);
+    expect(below).toBeGreaterThan(0.85);
+    expect(below).toBeLessThan(1);
+
+    // Preserves bounded rubber-band edges untouched for C1 smoothness
+    expect(applyMagneticDetent(0, 3)).toBe(0);
+    expect(applyMagneticDetent(-0.35, 3)).toBe(-0.35);
+    expect(applyMagneticDetent(2, 3)).toBe(2);
+    expect(applyMagneticDetent(2.4, 3)).toBe(2.4);
+  });
+
+  it("computes smoothstep centerFocusWeight across slot angle span", () => {
+    expect(centerFocusWeight(0, 0)).toBe(0);
+    expect(centerFocusWeight(0, 40)).toBe(1);
+    expect(centerFocusWeight(20, 40)).toBeCloseTo(0.5);
+    expect(centerFocusWeight(-20, 40)).toBeCloseTo(0.5);
+    expect(centerFocusWeight(40, 40)).toBe(0);
+    expect(centerFocusWeight(65, 40)).toBe(0);
+  });
+
+  it("steps coasting inertia smoothly and hands off cleanly to spring or bounded stops", () => {
+    const fast = stepCoastFrame(1.0, 6.0, 0.016, 5);
+    expect(fast.handoffToSpring).toBe(false);
+    expect(fast.position).toBeGreaterThan(1.0);
+    expect(fast.velocity).toBeGreaterThan(0);
+    expect(fast.velocity).toBeLessThan(6.0);
+
+    const slow = stepCoastFrame(1.42, 1.2, 0.016, 5);
+    expect(slow.handoffToSpring).toBe(true);
+    expect(slow.targetIndex).toBe(Math.round(slow.position + slow.velocity * 0.08));
+
+    // Bounded dial clamps cleanly at 0 and count - 1
+    const hitLeft = stepCoastFrame(0.03, -8.0, 0.016, 3);
+    expect(hitLeft.position).toBe(0);
+    expect(hitLeft.handoffToSpring).toBe(true);
+    expect(hitLeft.targetIndex).toBe(0);
+
+    const hitRight = stepCoastFrame(1.97, 8.0, 0.016, 3);
+    expect(hitRight.position).toBe(2);
+    expect(hitRight.handoffToSpring).toBe(true);
+    expect(hitRight.targetIndex).toBe(2);
+  });
+
+  it("simulates underdamped magnetic spring with tiny ~1.1% overshoot and clean settle", () => {
+    let disp = 1.0;
+    let vel = 0;
+    let minDisp = disp;
+    let settled = false;
+
+    for (let frame = 0; frame < 120; frame += 1) {
+      const next = stepUnderdampedSpring(disp, vel, 0.008);
+      disp = next.displacement;
+      vel = next.velocity;
+      minDisp = Math.min(minDisp, disp);
+      if (next.settled) {
+        settled = true;
+        break;
+      }
+    }
+
+    // ~1.1% magnetic overshoot past 0 before settling
+    expect(minDisp).toBeLessThan(0);
+    expect(minDisp).toBeGreaterThan(-0.02);
+    expect(settled).toBe(true);
+    expect(disp).toBe(0);
+    expect(vel).toBe(0);
+
+    const alreadySettled = stepUnderdampedSpring(0.0004, 0.001, 0.016);
+    expect(alreadySettled).toEqual({ displacement: 0, velocity: 0, settled: true });
   });
 });

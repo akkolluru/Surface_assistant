@@ -5,6 +5,14 @@ const TARGET_ARC_SPAN_DEG = 200;
 const RUBBER_BAND_DAMPING = 0.32;
 const VISIBLE_ARC_LIMIT_DEG = 82;
 const HIDDEN_ARC_LIMIT_DEG = 96;
+const DEFAULT_MAGNETIC_STRENGTH = 0.28;
+const MAX_MAGNETIC_STRENGTH = 0.6;
+const COAST_FRICTION = 5.2;
+const COAST_HANDOFF_SPEED = 1.4;
+const COAST_LOOKAHEAD_SEC = 0.08;
+const MAX_PHYSICS_DT_SEC = 0.05;
+const SPRING_SETTLE_DISP_EPSILON = 0.001;
+const SPRING_SETTLE_VEL_EPSILON = 0.005;
 
 /** Visibility, transform scale, and hit-test state for a single orbital dial slot. */
 export interface SlotVisibility {
@@ -12,6 +20,21 @@ export interface SlotVisibility {
   scale: number;
   interactive: boolean;
   hidden: boolean;
+}
+
+/** Output of one inertial coasting integration step. */
+export interface CoastFrameResult {
+  position: number;
+  velocity: number;
+  handoffToSpring: boolean;
+  targetIndex: number;
+}
+
+/** Output of one closed-form underdamped spring integration step. */
+export interface UnderdampedSpringResult {
+  displacement: number;
+  velocity: number;
+  settled: boolean;
 }
 
 /**
@@ -176,4 +199,146 @@ export function normalizeAngleDeltaDeg(deltaDeg: number): number {
   const wrapped = ((deltaDeg % 360) + 360) % 360;
   const normalized = wrapped > 180 ? wrapped - 360 : wrapped;
   return normalized === 0 ? 0 : normalized;
+}
+
+/**
+ * Applies a subtle magnetic detent warp toward nearest integer slot centers,
+ * while leaving bounded edge rubber-banding unmodified for smooth end stops.
+ */
+export function applyMagneticDetent(
+  continuousIndex: number,
+  count: number,
+  strength = DEFAULT_MAGNETIC_STRENGTH,
+): number {
+  if (!Number.isFinite(continuousIndex) || !Number.isFinite(count) || count <= 0) {
+    return 0;
+  }
+  if (isBoundedDial(count) && (continuousIndex <= 0 || continuousIndex >= count - 1)) {
+    return continuousIndex === 0 ? 0 : continuousIndex;
+  }
+  const k = Number.isFinite(strength)
+    ? Math.max(0, Math.min(MAX_MAGNETIC_STRENGTH, strength))
+    : DEFAULT_MAGNETIC_STRENGTH;
+  const warped = continuousIndex - (k / (2 * Math.PI)) * Math.sin(2 * Math.PI * continuousIndex);
+  return warped === 0 ? 0 : warped;
+}
+
+/**
+ * Smoothstep weight from `1` at `0°` center to `0` at `±stepDeg` for continuous
+ * focal emphasis (scale/brightness) during dial rotation.
+ */
+export function centerFocusWeight(absAngleDeg: number, stepDeg: number): number {
+  if (!Number.isFinite(absAngleDeg) || !Number.isFinite(stepDeg) || stepDeg <= 0) {
+    return 0;
+  }
+  const t = Math.max(0, Math.min(1, 1 - Math.abs(absAngleDeg) / stepDeg));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Integrates one inertial coasting frame with exponential friction decay and
+ * triggers handoff to the magnetic snap spring once speed falls below threshold
+ * or a bounded dial hits an end stop.
+ */
+export function stepCoastFrame(
+  position: number,
+  velocity: number,
+  dtSec: number,
+  count: number,
+): CoastFrameResult {
+  if (
+    !Number.isFinite(position) ||
+    !Number.isFinite(velocity) ||
+    !Number.isFinite(dtSec) ||
+    !Number.isFinite(count) ||
+    count <= 0
+  ) {
+    return { position: 0, velocity: 0, handoffToSpring: true, targetIndex: 0 };
+  }
+
+  const dt = Math.min(MAX_PHYSICS_DT_SEC, Math.max(0, dtSec));
+  const nextVel = velocity * Math.exp(-COAST_FRICTION * dt);
+  const nextPos = position + (velocity + nextVel) * 0.5 * dt;
+
+  if (isBoundedDial(count)) {
+    const maxIndex = count - 1;
+    if (nextPos <= 0 || nextPos >= maxIndex) {
+      const clampedPos = nextPos <= 0 ? 0 : maxIndex;
+      const targetIndex = nextPos <= 0 ? 0 : maxIndex;
+      return {
+        position: clampedPos,
+        velocity: nextVel === 0 ? 0 : nextVel,
+        handoffToSpring: true,
+        targetIndex,
+      };
+    }
+  }
+
+  if (Math.abs(nextVel) < COAST_HANDOFF_SPEED) {
+    const rawTarget = Math.round(nextPos + nextVel * COAST_LOOKAHEAD_SEC);
+    const boundedTarget = isBoundedDial(count)
+      ? Math.min(count - 1, Math.max(0, rawTarget))
+      : rawTarget;
+    return {
+      position: nextPos === 0 ? 0 : nextPos,
+      velocity: nextVel === 0 ? 0 : nextVel,
+      handoffToSpring: true,
+      targetIndex: boundedTarget === 0 ? 0 : boundedTarget,
+    };
+  }
+
+  const nearest = Math.round(nextPos);
+  return {
+    position: nextPos === 0 ? 0 : nextPos,
+    velocity: nextVel === 0 ? 0 : nextVel,
+    handoffToSpring: false,
+    targetIndex: nearest === 0 ? 0 : nearest,
+  };
+}
+
+/**
+ * Closed-form underdamped harmonic oscillator step (`zeta = 0.82` gives ~1.1%
+ * crisp magnetic settle) guaranteed unconditionally stable for any frame delta.
+ */
+export function stepUnderdampedSpring(
+  displacement: number,
+  velocity: number,
+  dtSec: number,
+  omega = 24,
+  dampingRatio = 0.82,
+): UnderdampedSpringResult {
+  if (!Number.isFinite(displacement) || !Number.isFinite(velocity)) {
+    return { displacement: 0, velocity: 0, settled: true };
+  }
+
+  const dt = Number.isFinite(dtSec) ? Math.min(MAX_PHYSICS_DT_SEC, Math.max(0, dtSec)) : 0;
+  const safeOmega = Number.isFinite(omega) && omega > 0 ? omega : 24;
+  const zeta = Number.isFinite(dampingRatio)
+    ? Math.max(0.05, Math.min(0.999, dampingRatio))
+    : 0.82;
+
+  const omegaD = safeOmega * Math.sqrt(1 - zeta * zeta);
+  const decay = Math.exp(-zeta * safeOmega * dt);
+  const cosTerm = Math.cos(omegaD * dt);
+  const sinTerm = Math.sin(omegaD * dt);
+
+  const b = (velocity + zeta * safeOmega * displacement) / omegaD;
+  const nextDisp = decay * (displacement * cosTerm + b * sinTerm);
+  const nextVel =
+    decay *
+    (velocity * cosTerm -
+      ((zeta * safeOmega * velocity + safeOmega * safeOmega * displacement) / omegaD) * sinTerm);
+
+  if (
+    Math.abs(nextDisp) < SPRING_SETTLE_DISP_EPSILON &&
+    Math.abs(nextVel) < SPRING_SETTLE_VEL_EPSILON
+  ) {
+    return { displacement: 0, velocity: 0, settled: true };
+  }
+
+  return {
+    displacement: nextDisp === 0 ? 0 : nextDisp,
+    velocity: nextVel === 0 ? 0 : nextVel,
+    settled: false,
+  };
 }
