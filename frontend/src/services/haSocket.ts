@@ -51,6 +51,8 @@ export const PLACEHOLDER_HA_ENTITIES: Record<string, SmartEntityState> = {
   },
 };
 
+const PLACEHOLDER_HA_TOKEN = "replace_with_long_lived_access_token";
+
 interface HaSocketMessage {
   id?: number;
   type: string;
@@ -181,8 +183,16 @@ export class HaClient {
           clearRetry();
         };
       }
-      const cfg = (await resp.json()) as { url: string; token: string };
-      if (!cfg.token || disposed) {
+      const cfg = (await resp.json()) as { url?: unknown; token?: unknown };
+      const rawUrl = typeof cfg.url === "string" ? cfg.url.trim().replace(/\/+$/, "") : "";
+      const rawToken = typeof cfg.token === "string" ? cfg.token.trim() : "";
+      if (
+        disposed ||
+        !rawUrl ||
+        !/^(https?|wss?):\/\//i.test(rawUrl) ||
+        !rawToken ||
+        rawToken === PLACEHOLDER_HA_TOKEN
+      ) {
         this.onUpdate(this.entities, false);
         return () => {
           disposed = true;
@@ -190,8 +200,8 @@ export class HaClient {
         };
       }
 
-      const wsUrl = cfg.url.replace(/^http/, "ws") + "/api/websocket";
-      openSocket(wsUrl, cfg.token);
+      const wsUrl = rawUrl.replace(/^http/i, "ws") + "/api/websocket";
+      openSocket(wsUrl, rawToken);
     } catch {
       this.onUpdate(this.entities, false);
     }

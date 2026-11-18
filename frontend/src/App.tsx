@@ -8,10 +8,29 @@ import { VolumeOSD } from "./components/VolumeOSD";
 import {
   connectDaemonSocket,
   daemonApi,
+  DaemonApiError,
   DEFAULT_DAEMON_SNAPSHOT,
 } from "./services/daemonSocket";
 import { HaClient, PLACEHOLDER_HA_ENTITIES } from "./services/haSocket";
 import type { AudioChannel, DaemonStateSnapshot, SmartEntityState } from "./types/hub";
+
+interface ToastNotice {
+  message: string;
+  urgent: boolean;
+}
+
+function resolveDaemonErrorMessage(err: unknown): string {
+  if (err instanceof DaemonApiError) {
+    return err.message;
+  }
+  if (typeof err === "object" && err !== null && "detail" in err) {
+    const detail = (err as { detail: unknown }).detail;
+    if (typeof detail === "string" && detail.trim().length > 0) {
+      return detail.trim();
+    }
+  }
+  return "Could not reach hardware daemon.";
+}
 
 const PANE_TITLES = [
   "Room Controls | Surface Hub",
@@ -34,7 +53,7 @@ function KioskHub() {
   );
   const [haConnected, setHaConnected] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastNotice | null>(null);
   const [activePane, setActivePane] = useState<0 | 1 | 2>(1);
   const [dragOffsetPx, setDragOffsetPx] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -43,6 +62,8 @@ function KioskHub() {
   const osdTimerRef = useRef<number | null>(null);
   const osdAutoCloseRef = useRef(false);
   const volumeOpenRef = useRef(false);
+  const launchingTileRef = useRef<string | null>(null);
+  const closingMediaRef = useRef(false);
   const suppressTimerRef = useRef<number | null>(null);
   const trackRef = useRef<HTMLElement>(null);
   const pane0Ref = useRef<HTMLDivElement>(null);
@@ -112,7 +133,7 @@ function KioskHub() {
             scheduleOsdAutoClose();
           }
         } else if (event.type === "toast") {
-          setToastMessage(event.payload.message);
+          setToast({ message: event.payload.message, urgent: false });
         }
       },
     });
@@ -149,10 +170,10 @@ function KioskHub() {
   }, []);
 
   useEffect(() => {
-    if (!toastMessage) return;
-    const t = window.setTimeout(() => setToastMessage(null), 4000);
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 4000);
     return () => window.clearTimeout(t);
-  }, [toastMessage]);
+  }, [toast]);
 
   const handleAudioChange = (
     channel: AudioChannel,
@@ -173,10 +194,41 @@ function KioskHub() {
   };
 
   const handleLaunchMedia = (tileId: string) => {
+    if (launchingTileRef.current !== null) {
+      return;
+    }
+    launchingTileRef.current = tileId;
     daemonApi
       .launchMedia(tileId)
-      .then((media) => setDaemonState((prev) => ({ ...prev, media })))
-      .catch(() => setToastMessage("Could not reach hardware daemon."));
+      .then((media) => {
+        setDaemonState((prev) => ({ ...prev, media }));
+      })
+      .catch((err: unknown) => {
+        setToast({ message: resolveDaemonErrorMessage(err), urgent: true });
+      })
+      .finally(() => {
+        if (launchingTileRef.current === tileId) {
+          launchingTileRef.current = null;
+        }
+      });
+  };
+
+  const handleCloseMedia = () => {
+    if (closingMediaRef.current) {
+      return;
+    }
+    closingMediaRef.current = true;
+    daemonApi
+      .closeMedia()
+      .then((media) => {
+        setDaemonState((prev) => ({ ...prev, media }));
+      })
+      .catch((err: unknown) => {
+        setToast({ message: resolveDaemonErrorMessage(err), urgent: true });
+      })
+      .finally(() => {
+        closingMediaRef.current = false;
+      });
   };
 
   const handleNextWallpaper = () => {
@@ -435,6 +487,7 @@ function KioskHub() {
             tiles={daemonState.tiles}
             activeTileId={daemonState.media.active_tile_id}
             onLaunchTile={handleLaunchMedia}
+            onCloseMedia={handleCloseMedia}
             onNavigateHub={() => navigatePane(1)}
           />
         </div>
@@ -480,12 +533,25 @@ function KioskHub() {
         onChangeLevel={handleAudioChange}
       />
 
-      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 top-5 z-50 flex justify-center">
-        {toastMessage && (
-          <div className="glass-panel rounded-full px-5 py-2 text-sm font-medium text-white shadow-xl">
-            {toastMessage}
-          </div>
-        )}
+      <div
+        role="region"
+        aria-label="Notifications"
+        className="pointer-events-none fixed inset-x-0 top-5 z-50 flex justify-center px-4"
+      >
+        <div aria-live="polite" aria-atomic="true">
+          {toast && !toast.urgent && (
+            <div className="glass-panel max-w-md rounded-2xl px-5 py-2.5 text-center text-sm font-medium text-white shadow-xl">
+              {toast.message}
+            </div>
+          )}
+        </div>
+        <div aria-live="assertive" aria-atomic="true">
+          {toast && toast.urgent && (
+            <div className="glass-panel max-w-md rounded-2xl border-rose-400/35 px-5 py-2.5 text-center text-sm font-medium text-rose-100 shadow-xl">
+              {toast.message}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

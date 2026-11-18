@@ -10,6 +10,7 @@ import {
   Tv,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import {
   connectDaemonSocket,
@@ -228,6 +229,18 @@ export function SimulatorConsole() {
                 className="touch-target rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold hover:bg-white/20"
               >
                 ⌂ Waybar Home Pill
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  daemonApi
+                    .closeMedia()
+                    .catch(() => setStatusLog("Failed to close running media."))
+                }
+                className="touch-target flex items-center gap-1.5 rounded-xl bg-rose-500/20 px-3.5 py-2 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+                Close Media
               </button>
               <button
                 type="button"

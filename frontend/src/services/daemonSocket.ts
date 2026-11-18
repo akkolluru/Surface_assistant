@@ -47,6 +47,42 @@ export const DEFAULT_DAEMON_SNAPSHOT: DaemonStateSnapshot = {
   ],
 };
 
+/** Typed HTTP error thrown when the hardware daemon returns a non-2xx response. */
+export class DaemonApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+  readonly url: string;
+
+  constructor(status: number, detail: string, url: string) {
+    const resolvedMessage = detail || `Daemon request failed (${status}): ${url}`;
+    super(resolvedMessage);
+    this.name = "DaemonApiError";
+    this.status = status;
+    this.detail = detail || resolvedMessage;
+    this.url = url;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+async function parseDaemonErrorDetail(response: Response): Promise<string> {
+  if (typeof response.json === "function") {
+    try {
+      const payload = (await response.json()) as { detail?: unknown } | null;
+      if (payload && typeof payload === "object" && "detail" in payload) {
+        if (typeof payload.detail === "string" && payload.detail.trim().length > 0) {
+          return payload.detail.trim();
+        }
+        if (payload.detail !== undefined && payload.detail !== null) {
+          return JSON.stringify(payload.detail);
+        }
+      }
+    } catch {
+      // Non-JSON or empty error response; fall back to HTTP status text.
+    }
+  }
+  return typeof response.statusText === "string" ? response.statusText.trim() : "";
+}
+
 async function postJson<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
     method: "POST",
@@ -54,7 +90,8 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) {
-    throw new Error(`Daemon request failed (${response.status}): ${url}`);
+    const detail = await parseDaemonErrorDetail(response);
+    throw new DaemonApiError(response.status, detail, url);
   }
   return (await response.json()) as T;
 }
@@ -69,6 +106,7 @@ export const daemonApi = {
   },
   launchMedia: (tileId: string): Promise<MediaState> =>
     postJson<MediaState>("/api/media/launch", { tile_id: tileId }),
+  closeMedia: (): Promise<MediaState> => postJson<MediaState>("/api/media/close"),
   returnHome: (): Promise<MediaState> => postJson<MediaState>("/api/media/home"),
   nextWallpaper: (): Promise<WallpaperState> => postJson<WallpaperState>("/api/wallpapers/next"),
   setSleepTimer: (minutes: number): Promise<MediaState> =>

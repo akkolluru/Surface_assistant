@@ -11,7 +11,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { MediaTileConfig } from "../types/hub";
 import { MediaBrandLogo, getBrandTheme } from "./MediaBrandLogos";
 import { createDialAudio, type DialAudioHandle } from "./dialAudio";
@@ -37,6 +37,7 @@ export interface MediaLauncherProps {
   tiles: MediaTileConfig[];
   activeTileId: string | null;
   onLaunchTile: (tileId: string) => void;
+  onCloseMedia?: () => void;
   onNavigateHub: () => void;
 }
 
@@ -183,6 +184,7 @@ function MediaDialLauncher({
   tiles,
   activeTileId,
   onLaunchTile,
+  onCloseMedia,
   onNavigateHub,
 }: MediaDialLauncherProps) {
   const count = tiles.length;
@@ -836,6 +838,10 @@ function MediaDialLauncher({
 
   const selectedTheme = getBrandTheme(selectedTile.id);
   const isSelectedRunning = activeTileId === selectedTile.id;
+  const runningTile = activeTileId
+    ? tiles.find((tile) => tile.id === activeTileId) ?? null
+    : null;
+  const runningTileLabel = runningTile?.label ?? activeTileId;
   const leftDisabled = bounded && safeSelectedIndex === 0;
   const rightDisabled = bounded && safeSelectedIndex === count - 1;
 
@@ -921,6 +927,20 @@ function MediaDialLauncher({
           <span>Hub</span>
         </button>
 
+        {/* Close Active Media App Pill */}
+        {activeTileId !== null && runningTileLabel && onCloseMedia && (
+          <button
+            type="button"
+            onClick={onCloseMedia}
+            data-testid="close-media-button"
+            aria-label={`Close running ${runningTileLabel}`}
+            className="glass-panel touch-target absolute right-6 bottom-14 z-20 flex min-h-[44px] items-center gap-1.5 rounded-full border-rose-400/30 px-4 py-2 text-sm font-medium text-rose-100 hover:bg-rose-500/20 hover:text-white md:right-8"
+          >
+            <X className="h-4 w-4 shrink-0 text-rose-300" aria-hidden="true" />
+            <span>Close {runningTileLabel}</span>
+          </button>
+        )}
+
         {/* Ghost Flanking Chevrons */}
         <button
           type="button"
@@ -951,6 +971,7 @@ function MediaDialLauncher({
         {/* Orbital Dial Stage (pointer-events-none outer wrapper preserves horizontal pane swipes) */}
         <div
           ref={dialStageRef}
+          onClickCapture={handleDialClickCapture}
           className="pointer-events-none absolute bottom-14 left-1/2 -translate-x-1/2 overflow-hidden"
           style={{
             width: "calc(var(--dial-r) * 2.78)",
@@ -1103,7 +1124,6 @@ function MediaDialLauncher({
             role="group"
             aria-label="Media service dial"
             onKeyDown={handleDialKeyDown}
-            onClickCapture={handleDialClickCapture}
             className="pointer-events-none absolute inset-0"
           >
             {tiles.map((tile, idx) => {
@@ -1164,12 +1184,19 @@ function MediaDialLauncher({
                       />
                     )}
 
-                    {isSelected && (
+                    {isSelected ? (
                       <span
                         aria-hidden="true"
                         className="pointer-events-none absolute -bottom-2.5 left-1/2 -translate-x-1/2 rounded-full border border-white/15 bg-zinc-950/95 px-2.5 py-0.5 text-[10px] font-semibold tracking-wider text-white/90 uppercase shadow-md"
                       >
                         {isRunning ? "Resume" : "Watch"}
+                      </span>
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute -bottom-1.5 left-1/2 max-w-full -translate-x-1/2 truncate rounded-full border border-white/15 bg-zinc-950/90 px-1 py-[1px] text-[9px] leading-tight font-medium tracking-wide text-white/80 shadow-sm"
+                      >
+                        {tile.label}
                       </span>
                     )}
                   </button>
@@ -1191,6 +1218,7 @@ export function MediaLauncher({
   tiles,
   activeTileId,
   onLaunchTile,
+  onCloseMedia,
   onNavigateHub,
 }: MediaLauncherProps) {
   if (tiles.length === 0) {
@@ -1202,6 +1230,7 @@ export function MediaLauncher({
       tiles={tiles}
       activeTileId={activeTileId}
       onLaunchTile={onLaunchTile}
+      onCloseMedia={onCloseMedia}
       onNavigateHub={onNavigateHub}
     />
   );
