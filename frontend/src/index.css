@@ -93,8 +93,26 @@ a:active {
   }
 }
 
+@keyframes reticle-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.24);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .hologram-enter {
-    animation: hologram-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: hologram-enter 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .reticle-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: reticle-pulse 180ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }

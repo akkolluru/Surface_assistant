@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -13,7 +14,10 @@ import {
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { MediaTileConfig } from "../types/hub";
 import { MediaBrandLogo, getBrandTheme } from "./MediaBrandLogos";
+import { createDialAudio, type DialAudioHandle } from "./dialAudio";
 import {
+  applyMagneticDetent,
+  centerFocusWeight,
   clampDragContinuousIndex,
   computeStepDeg,
   defaultInitialIndex,
@@ -23,6 +27,8 @@ import {
   pointerAngleDeg,
   shortestModularDelta,
   slotVisibility,
+  stepCoastFrame,
+  stepUnderdampedSpring,
   wrapTileIndex,
 } from "./mediaDialMath";
 
@@ -39,24 +45,57 @@ type DialStyleProperties = CSSProperties & {
   "--dial-r": string;
 };
 
+type AnimationMode = "idle" | "coast" | "spring";
+
+interface VelocitySample {
+  timeMs: number;
+  pos: number;
+}
+
 interface ActiveDialDrag {
   pointerId: number;
   startX: number;
   startY: number;
+  thresholdPx: number;
   lastAngleDeg: number;
   cumulativeAngleDeg: number;
-  startContinuous: number;
+  anchorContinuous: number;
   pivotCx: number;
   pivotCy: number;
   active: boolean;
+  caughtCoast: boolean;
+  samples: VelocitySample[];
 }
 
-const DRAG_THRESHOLD_PX = 22;
+interface BezelTick {
+  key: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  major: boolean;
+}
+
+const DRAG_BUTTON_THRESHOLD_PX = 22;
+const DRAG_TRACK_THRESHOLD_PX = 6;
 const FALLBACK_ORBIT_PX = 220;
-const SPRING_OMEGA = 18;
+const COAST_HANDOFF_SPEED = 1.4;
+const MAX_COAST_VELOCITY = 14;
+const VELOCITY_WINDOW_MS = 90;
+const STALE_PAUSE_MS = 85;
+const MIN_VELOCITY_SPAN_SEC = 0.008;
+const MAGNETIC_DETENT_STRENGTH = 0.28;
+const SUB_TICKS_PER_SLOT = 5;
+const SPRING_OMEGA = 24;
+const SPRING_DAMPING_RATIO = 0.82;
 const SPRING_SETTLE_EPSILON = 0.001;
+const SPRING_VEL_SETTLE_EPSILON = 0.005;
 const CLICK_SUPPRESS_TIMEOUT_MS = 150;
 const DIAL_RADIUS_EXPR = "clamp(148px, min(24vw, calc(28vh - 44px)), 240px)";
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
 
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined") {
@@ -87,6 +126,26 @@ function resolveDialPivot(
     cx: fallbackLeft + fallbackWidth / 2,
     cy: fallbackTop + fallbackHeight,
   };
+}
+
+function computeReleaseVelocity(samples: VelocitySample[], releaseTimeMs: number): number {
+  if (prefersReducedMotion() || samples.length < 2) {
+    return 0;
+  }
+  const newest = samples[samples.length - 1];
+  const oldest = samples[0];
+  if (!newest || !oldest) {
+    return 0;
+  }
+  if (releaseTimeMs - newest.timeMs > STALE_PAUSE_MS) {
+    return 0;
+  }
+  const dtSec = (newest.timeMs - oldest.timeMs) / 1000;
+  if (dtSec < MIN_VELOCITY_SPAN_SEC) {
+    return 0;
+  }
+  const rawVel = (newest.pos - oldest.pos) / dtSec;
+  return Math.max(-MAX_COAST_VELOCITY, Math.min(MAX_COAST_VELOCITY, rawVel));
 }
 
 function EmptyMediaLauncher({ onNavigateHub }: Pick<MediaLauncherProps, "onNavigateHub">) {
@@ -146,12 +205,16 @@ function MediaDialLauncher({
   const safeSelectedIndex = wrapTileIndex(selectedIndex, count);
 
   const dialStageRef = useRef<HTMLDivElement | null>(null);
+  const bezelTicksRef = useRef<SVGGElement | null>(null);
+  const reticleRef = useRef<SVGGElement | null>(null);
   const slotRefs = useRef<Array<HTMLDivElement | null>>([]);
   const slotButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const continuousIndexRef = useRef<number>(safeSelectedIndex);
+  const rawDragPosRef = useRef<number>(safeSelectedIndex);
   const targetContinuousRef = useRef<number>(safeSelectedIndex);
   const velocityRef = useRef<number>(0);
+  const animationModeRef = useRef<AnimationMode>("idle");
   const isDraggingRef = useRef<boolean>(false);
   const lastFrameTimeRef = useRef<number | null>(null);
   const rafIdRef = useRef<number | null>(null);
@@ -163,6 +226,18 @@ function MediaDialLauncher({
   const keyboardNavRef = useRef<boolean>(false);
   const prevActiveTileIdRef = useRef<string | null>(activeTileId);
 
+  const dialAudioRef = useRef<DialAudioHandle | null>(null);
+  const userActivatedRef = useRef<boolean>(false);
+  const lastDetentRef = useRef<number>(safeSelectedIndex);
+  const lastSubTickRef = useRef<number>(safeSelectedIndex * SUB_TICKS_PER_SLOT);
+
+  const getDialAudio = useCallback((): DialAudioHandle => {
+    if (!dialAudioRef.current) {
+      dialAudioRef.current = createDialAudio();
+    }
+    return dialAudioRef.current;
+  }, []);
+
   const clearDialSuppressTimer = useCallback(() => {
     if (suppressTimerRef.current !== null) {
       window.clearTimeout(suppressTimerRef.current);
@@ -170,7 +245,7 @@ function MediaDialLauncher({
     }
   }, []);
 
-  const stopSpringLoop = useCallback(() => {
+  const stopAnimationLoop = useCallback(() => {
     if (rafIdRef.current !== null) {
       window.cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
@@ -178,8 +253,55 @@ function MediaDialLauncher({
     lastFrameTimeRef.current = null;
   }, []);
 
+  const triggerReticlePulse = useCallback(() => {
+    const reticle = reticleRef.current;
+    if (!reticle || prefersReducedMotion()) {
+      return;
+    }
+    reticle.classList.remove("reticle-pulse");
+    // Flush layout/animation state so consecutive detents retrigger the CSS keyframe.
+    void reticle.getBoundingClientRect();
+    reticle.classList.add("reticle-pulse");
+  }, []);
+
+  const notifyMotionCues = useCallback(
+    (continuousPos: number) => {
+      const detentIdx = Math.round(continuousPos);
+      const subTickIdx = Math.round(continuousPos * SUB_TICKS_PER_SLOT);
+
+      if (!userActivatedRef.current) {
+        lastDetentRef.current = detentIdx;
+        lastSubTickRef.current = subTickIdx;
+        return;
+      }
+
+      if (detentIdx !== lastDetentRef.current) {
+        lastDetentRef.current = detentIdx;
+        lastSubTickRef.current = subTickIdx;
+        getDialAudio().play("detent");
+        triggerReticlePulse();
+        return;
+      }
+
+      if (subTickIdx !== lastSubTickRef.current) {
+        lastSubTickRef.current = subTickIdx;
+        const mod = ((subTickIdx % SUB_TICKS_PER_SLOT) + SUB_TICKS_PER_SLOT) % SUB_TICKS_PER_SLOT;
+        if (mod !== 0) {
+          getDialAudio().play("tick");
+        }
+      }
+    },
+    [getDialAudio, triggerReticlePulse],
+  );
+
   const applyDialTransforms = useCallback(
     (continuous: number) => {
+      if (bezelTicksRef.current && stepDeg > 0) {
+        const wrappedSlotFrac = continuous - Math.floor(continuous);
+        const tickAngleDeg = -(wrappedSlotFrac * stepDeg);
+        bezelTicksRef.current.setAttribute("transform", `rotate(${tickAngleDeg.toFixed(3)})`);
+      }
+
       for (let idx = 0; idx < count; idx += 1) {
         const slotEl = slotRefs.current[idx];
         if (!slotEl) continue;
@@ -188,12 +310,14 @@ function MediaDialLauncher({
         const angleDeg = offset * stepDeg;
         const angleRad = (angleDeg * Math.PI) / 180;
         const vis = slotVisibility(Math.abs(angleDeg));
+        const focus = centerFocusWeight(Math.abs(angleDeg), stepDeg);
+        const blendedScale = vis.scale * (0.96 + focus * 0.1);
 
         const sin = Math.sin(angleRad);
         const cos = Math.cos(angleRad);
 
         // Decouple polar transform onto this non-button wrapper so CSS button scale composes cleanly.
-        slotEl.style.transform = `translate3d(calc(-50% + var(--dial-r) * ${sin.toFixed(5)}), calc(-50% - var(--dial-r) * ${cos.toFixed(5)}), 0) scale(${vis.scale.toFixed(4)})`;
+        slotEl.style.transform = `translate3d(calc(-50% + var(--dial-r) * ${sin.toFixed(5)}), calc(-50% - var(--dial-r) * ${cos.toFixed(5)}), 0) scale(${blendedScale.toFixed(4)})`;
         slotEl.style.opacity = vis.opacity.toFixed(3);
         slotEl.style.visibility = vis.hidden ? "hidden" : "visible";
         slotEl.style.pointerEvents = vis.interactive ? "auto" : "none";
@@ -203,19 +327,25 @@ function MediaDialLauncher({
     [count, stepDeg],
   );
 
-  const stepSpringRef = useRef<(timestamp: number) => void>(() => {});
-  stepSpringRef.current = (timestamp: number) => {
-    if (isDraggingRef.current) {
-      stopSpringLoop();
+  const stepAnimationRef = useRef<(timestamp: number) => void>(() => {});
+  stepAnimationRef.current = (timestamp: number) => {
+    if (isDraggingRef.current || animationModeRef.current === "idle") {
+      stopAnimationLoop();
       return;
     }
 
-    const target = targetContinuousRef.current;
     if (prefersReducedMotion()) {
+      const target =
+        animationModeRef.current === "coast"
+          ? wrapTileIndex(Math.round(continuousIndexRef.current), count)
+          : targetContinuousRef.current;
       continuousIndexRef.current = target;
+      rawDragPosRef.current = target;
       velocityRef.current = 0;
+      animationModeRef.current = "idle";
+      notifyMotionCues(target);
       applyDialTransforms(target);
-      stopSpringLoop();
+      stopAnimationLoop();
       return;
     }
 
@@ -223,73 +353,117 @@ function MediaDialLauncher({
     const dt = Math.min(0.05, Math.max(0.001, (timestamp - prevTime) / 1000));
     lastFrameTimeRef.current = timestamp;
 
-    // Closed-form critically damped spring step (unconditionally stable across frame rates).
-    const displacement = continuousIndexRef.current - target;
-    const velocity = velocityRef.current;
-    const exp = Math.exp(-SPRING_OMEGA * dt);
-    const c = velocity + SPRING_OMEGA * displacement;
-    const nextDisplacement = (displacement + c * dt) * exp;
-    const nextVelocity = (velocity - SPRING_OMEGA * c * dt) * exp;
-    const nextValue = target + nextDisplacement;
+    if (animationModeRef.current === "coast") {
+      const res = stepCoastFrame(continuousIndexRef.current, velocityRef.current, dt, count);
+      continuousIndexRef.current = res.position;
+      rawDragPosRef.current = res.position;
+      velocityRef.current = res.velocity;
+      notifyMotionCues(res.position);
+      applyDialTransforms(res.position);
 
-    if (
-      Math.abs(nextDisplacement) < SPRING_SETTLE_EPSILON &&
-      Math.abs(nextVelocity) < SPRING_SETTLE_EPSILON
-    ) {
-      continuousIndexRef.current = target;
-      velocityRef.current = 0;
-      applyDialTransforms(target);
-      stopSpringLoop();
+      const liveNearest = wrapTileIndex(res.targetIndex, count);
+      keyboardNavRef.current = false;
+      setSelectedIndex((prev) => (prev === liveNearest ? prev : liveNearest));
+
+      if (res.handoffToSpring) {
+        targetContinuousRef.current = res.targetIndex;
+        animationModeRef.current = "spring";
+      }
+
+      rafIdRef.current = window.requestAnimationFrame((nextTs) =>
+        stepAnimationRef.current(nextTs),
+      );
       return;
     }
 
-    continuousIndexRef.current = nextValue;
-    velocityRef.current = nextVelocity;
-    applyDialTransforms(nextValue);
-    rafIdRef.current = window.requestAnimationFrame((nextTs) => stepSpringRef.current(nextTs));
+    const target = targetContinuousRef.current;
+    const res = stepUnderdampedSpring(
+      continuousIndexRef.current - target,
+      velocityRef.current,
+      dt,
+      SPRING_OMEGA,
+      SPRING_DAMPING_RATIO,
+    );
+
+    if (res.settled) {
+      continuousIndexRef.current = target;
+      rawDragPosRef.current = target;
+      velocityRef.current = 0;
+      animationModeRef.current = "idle";
+      notifyMotionCues(target);
+      applyDialTransforms(target);
+      stopAnimationLoop();
+      return;
+    }
+
+    const nextPos = target + res.displacement;
+    continuousIndexRef.current = nextPos;
+    rawDragPosRef.current = nextPos;
+    velocityRef.current = res.velocity;
+    notifyMotionCues(nextPos);
+    applyDialTransforms(nextPos);
+    rafIdRef.current = window.requestAnimationFrame((nextTs) => stepAnimationRef.current(nextTs));
   };
+
+  const startAnimationLoop = useCallback(() => {
+    if (rafIdRef.current === null) {
+      lastFrameTimeRef.current = null;
+      rafIdRef.current = window.requestAnimationFrame((ts) => stepAnimationRef.current(ts));
+    }
+  }, []);
 
   const scheduleSpringFrame = useCallback(() => {
     const isSettled =
       Math.abs(targetContinuousRef.current - continuousIndexRef.current) < SPRING_SETTLE_EPSILON &&
-      Math.abs(velocityRef.current) < SPRING_SETTLE_EPSILON;
+      Math.abs(velocityRef.current) < SPRING_VEL_SETTLE_EPSILON;
 
     if (prefersReducedMotion() || isSettled) {
-      stopSpringLoop();
+      stopAnimationLoop();
       continuousIndexRef.current = targetContinuousRef.current;
+      rawDragPosRef.current = targetContinuousRef.current;
       velocityRef.current = 0;
+      animationModeRef.current = "idle";
+      notifyMotionCues(continuousIndexRef.current);
       applyDialTransforms(continuousIndexRef.current);
       return;
     }
-    if (rafIdRef.current === null) {
-      lastFrameTimeRef.current = null;
-      rafIdRef.current = window.requestAnimationFrame((ts) => stepSpringRef.current(ts));
-    }
-  }, [applyDialTransforms, stopSpringLoop]);
+
+    animationModeRef.current = "spring";
+    startAnimationLoop();
+  }, [applyDialTransforms, notifyMotionCues, startAnimationLoop, stopAnimationLoop]);
 
   // Keep latest dial metrics accessible to active window drag listeners without rebinding mid-gesture.
   const latestMetricsRef = useRef({
     count,
     stepDeg,
     applyDialTransforms,
+    notifyMotionCues,
     scheduleSpringFrame,
+    startAnimationLoop,
+    stopAnimationLoop,
   });
   latestMetricsRef.current = {
     count,
     stepDeg,
     applyDialTransforms,
+    notifyMotionCues,
     scheduleSpringFrame,
+    startAnimationLoop,
+    stopAnimationLoop,
   };
 
   // Clamp/wrap selection if the tile count shrinks dynamically.
   useEffect(() => {
     setSelectedIndex((prev) => {
       const next = wrapTileIndex(prev, count);
+      if (next !== prev) {
+        userActivatedRef.current = false;
+      }
       return next === prev ? prev : next;
     });
   }, [count]);
 
-  // Sync dial center only when activeTileId actually changes externally.
+  // Sync dial center only when activeTileId actually changes externally (silently).
   useEffect(() => {
     if (activeTileId === prevActiveTileIdRef.current) {
       return;
@@ -300,14 +474,25 @@ function MediaDialLauncher({
     }
     const activeIdx = tiles.findIndex((tile) => tile.id === activeTileId);
     if (activeIdx >= 0) {
+      userActivatedRef.current = false;
       keyboardNavRef.current = false;
+      if (animationModeRef.current === "coast") {
+        animationModeRef.current = "idle";
+        velocityRef.current = 0;
+      }
       setSelectedIndex(activeIdx);
     }
   }, [activeTileId, tiles]);
 
-  // Synchronize slot transforms before first paint and whenever selection updates outside drag.
+  // Synchronize slot transforms before first paint and whenever selection updates outside drag/coast.
   useLayoutEffect(() => {
-    if (isDraggingRef.current) {
+    if (isDraggingRef.current || animationModeRef.current === "coast") {
+      return;
+    }
+    if (
+      animationModeRef.current === "spring" &&
+      wrapTileIndex(Math.round(targetContinuousRef.current), count) === safeSelectedIndex
+    ) {
       return;
     }
     const delta = shortestModularDelta(continuousIndexRef.current, safeSelectedIndex, count);
@@ -325,22 +510,67 @@ function MediaDialLauncher({
     slotButtonRefs.current[safeSelectedIndex]?.focus();
   }, [safeSelectedIndex]);
 
-  // Clean up rAF, window drag listeners, and suppression timers on unmount.
+  // Clean up rAF, window drag listeners, suppression timers, and Web Audio on unmount.
   useEffect(() => {
     return () => {
-      stopSpringLoop();
+      stopAnimationLoop();
       detachWindowListenersRef.current();
       clearDialSuppressTimer();
+      dialAudioRef.current?.dispose();
+      dialAudioRef.current = null;
     };
-  }, [clearDialSuppressTimer, stopSpringLoop]);
+  }, [clearDialSuppressTimer, stopAnimationLoop]);
+
+  const bezelTicks = useMemo<BezelTick[]>(() => {
+    if (stepDeg <= 0) {
+      return [];
+    }
+    const minK = Math.floor(-95 / stepDeg);
+    const maxK = Math.ceil((95 + stepDeg) / stepDeg);
+    const ticks: BezelTick[] = [];
+
+    for (let k = minK; k <= maxK; k += 1) {
+      for (let m = 0; m < SUB_TICKS_PER_SLOT; m += 1) {
+        const deg = (k + m / SUB_TICKS_PER_SLOT) * stepDeg;
+        const rad = (deg * Math.PI) / 180;
+        const major = m === 0;
+        const innerR = major ? 301 : 306;
+        const outerR = major ? 317 : 314;
+        const sin = Math.sin(rad);
+        const cos = Math.cos(rad);
+        ticks.push({
+          key: `${k}:${m}`,
+          x1: Number((innerR * sin).toFixed(2)),
+          y1: Number((-innerR * cos).toFixed(2)),
+          x2: Number((outerR * sin).toFixed(2)),
+          y2: Number((-outerR * cos).toFixed(2)),
+          major,
+        });
+      }
+    }
+    return ticks;
+  }, [stepDeg]);
 
   const handleDialPointerDown = (event: ReactPointerEvent<HTMLElement | SVGPathElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if (event.isPrimary === false) return;
     if (dragStateRef.current !== null) return;
 
+    getDialAudio().unlock();
+    userActivatedRef.current = true;
     clearDialSuppressTimer();
     dialSuppressClickRef.current = false;
+
+    const caughtCoast = animationModeRef.current === "coast";
+    if (caughtCoast) {
+      stopAnimationLoop();
+      animationModeRef.current = "idle";
+      velocityRef.current = 0;
+      rawDragPosRef.current = continuousIndexRef.current;
+    }
+
+    const startedOnButton = Boolean((event.target as Element | null)?.closest("button"));
+    const thresholdPx = startedOnButton ? DRAG_BUTTON_THRESHOLD_PX : DRAG_TRACK_THRESHOLD_PX;
 
     const pivot = resolveDialPivot(dialStageRef.current, event.clientX, event.clientY);
     const initialAngle = pointerAngleDeg(event.clientX, event.clientY, pivot.cx, pivot.cy);
@@ -349,15 +579,18 @@ function MediaDialLauncher({
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      thresholdPx,
       lastAngleDeg: initialAngle,
       cumulativeAngleDeg: 0,
-      startContinuous: continuousIndexRef.current,
+      anchorContinuous: continuousIndexRef.current,
       pivotCx: pivot.cx,
       pivotCy: pivot.cy,
       active: false,
+      caughtCoast,
+      samples: [],
     };
 
-    const finishDrag = (pointerId: number | null) => {
+    const finishDrag = (pointerId: number | null, canceled = false) => {
       const drag = dragStateRef.current;
       if (!drag) return;
       if (pointerId !== null && drag.pointerId !== pointerId) return;
@@ -366,13 +599,14 @@ function MediaDialLauncher({
       dragStateRef.current = null;
       isDraggingRef.current = false;
 
-      if (!drag.active) {
+      if (!drag.active && !drag.caughtCoast) {
         return;
       }
 
       const {
         count: currentCount,
         scheduleSpringFrame: scheduleSpring,
+        startAnimationLoop: startLoop,
       } = latestMetricsRef.current;
 
       dialSuppressClickRef.current = true;
@@ -382,12 +616,40 @@ function MediaDialLauncher({
         suppressTimerRef.current = null;
       }, CLICK_SUPPRESS_TIMEOUT_MS);
 
-      const snapped = wrapTileIndex(Math.round(continuousIndexRef.current), currentCount);
-      keyboardNavRef.current = false;
-      setSelectedIndex(snapped);
+      if (!drag.active && drag.caughtCoast) {
+        const rawRounded = Math.round(continuousIndexRef.current);
+        const target = isBoundedDial(currentCount)
+          ? Math.min(currentCount - 1, Math.max(0, rawRounded))
+          : rawRounded;
+        const wrapped = wrapTileIndex(target, currentCount);
 
-      const delta = shortestModularDelta(continuousIndexRef.current, snapped, currentCount);
-      targetContinuousRef.current = continuousIndexRef.current + delta;
+        keyboardNavRef.current = false;
+        setSelectedIndex(wrapped);
+        targetContinuousRef.current = target;
+        velocityRef.current = 0;
+        scheduleSpring();
+        return;
+      }
+
+      const releaseVel = canceled ? 0 : computeReleaseVelocity(drag.samples, nowMs());
+
+      if (Math.abs(releaseVel) >= COAST_HANDOFF_SPEED) {
+        velocityRef.current = releaseVel;
+        animationModeRef.current = "coast";
+        startLoop();
+        return;
+      }
+
+      const rawRounded = Math.round(rawDragPosRef.current);
+      const target = isBoundedDial(currentCount)
+        ? Math.min(currentCount - 1, Math.max(0, rawRounded))
+        : rawRounded;
+      const wrapped = wrapTileIndex(target, currentCount);
+
+      keyboardNavRef.current = false;
+      setSelectedIndex(wrapped);
+      targetContinuousRef.current = target;
+      velocityRef.current = releaseVel;
       scheduleSpring();
     };
 
@@ -395,60 +657,92 @@ function MediaDialLauncher({
       const drag = dragStateRef.current;
       if (!drag || drag.pointerId !== moveEvent.pointerId) return;
 
+      const timestamp = nowMs();
       const currentAngle = pointerAngleDeg(
         moveEvent.clientX,
         moveEvent.clientY,
         drag.pivotCx,
         drag.pivotCy,
       );
-      const stepDelta = normalizeAngleDeltaDeg(currentAngle - drag.lastAngleDeg);
-      drag.lastAngleDeg = currentAngle;
-      drag.cumulativeAngleDeg += stepDelta;
 
       if (!drag.active) {
         const dist = Math.hypot(
           moveEvent.clientX - drag.startX,
           moveEvent.clientY - drag.startY,
         );
-        if (dist < DRAG_THRESHOLD_PX) {
+        if (dist < drag.thresholdPx) {
+          drag.lastAngleDeg = currentAngle;
           return;
         }
+
+        // Engage seamlessly from the threshold boundary so there is zero sudden angle snap.
+        const engageRatio = drag.thresholdPx / dist;
+        const engageX = drag.startX + (moveEvent.clientX - drag.startX) * engageRatio;
+        const engageY = drag.startY + (moveEvent.clientY - drag.startY) * engageRatio;
+        const engageAngle = pointerAngleDeg(engageX, engageY, drag.pivotCx, drag.pivotCy);
+
         drag.active = true;
         isDraggingRef.current = true;
         dialSuppressClickRef.current = true;
         velocityRef.current = 0;
-        stopSpringLoop();
+        animationModeRef.current = "idle";
+        latestMetricsRef.current.stopAnimationLoop();
+
+        drag.anchorContinuous = continuousIndexRef.current;
+        rawDragPosRef.current = continuousIndexRef.current;
+        drag.lastAngleDeg = engageAngle;
+        drag.cumulativeAngleDeg = 0;
+        drag.samples = [{ timeMs: timestamp, pos: continuousIndexRef.current }];
       }
+
+      const stepDelta = normalizeAngleDeltaDeg(currentAngle - drag.lastAngleDeg);
+      drag.lastAngleDeg = currentAngle;
+      drag.cumulativeAngleDeg += stepDelta;
 
       const {
         count: currentCount,
         stepDeg: currentStepDeg,
         applyDialTransforms: applyTransforms,
+        notifyMotionCues: notifyCues,
       } = latestMetricsRef.current;
 
       if (currentStepDeg <= 0) return;
 
-      const rawTarget = drag.startContinuous - drag.cumulativeAngleDeg / currentStepDeg;
-      const clamped = clampDragContinuousIndex(rawTarget, currentCount);
-      continuousIndexRef.current = clamped;
-      targetContinuousRef.current = clamped;
-      applyTransforms(clamped);
+      const rawTarget = drag.anchorContinuous - drag.cumulativeAngleDeg / currentStepDeg;
+      const dampedRaw = clampDragContinuousIndex(rawTarget, currentCount);
+      rawDragPosRef.current = dampedRaw;
 
-      const nearest = wrapTileIndex(Math.round(clamped), currentCount);
+      const visualPos = applyMagneticDetent(dampedRaw, currentCount, MAGNETIC_DETENT_STRENGTH);
+      continuousIndexRef.current = visualPos;
+      targetContinuousRef.current = visualPos;
+
+      drag.samples.push({ timeMs: timestamp, pos: dampedRaw });
+      while (drag.samples.length > 1) {
+        const oldest = drag.samples[0];
+        if (!oldest || timestamp - oldest.timeMs <= VELOCITY_WINDOW_MS) {
+          break;
+        }
+        drag.samples.shift();
+      }
+
+      notifyCues(visualPos);
+      applyTransforms(visualPos);
+
+      const nearest = wrapTileIndex(Math.round(dampedRaw), currentCount);
       keyboardNavRef.current = false;
       setSelectedIndex((prev) => (prev === nearest ? prev : nearest));
     };
 
     const onWindowPointerUp = (upEvent: PointerEvent) => {
-      finishDrag(upEvent.pointerId);
+      finishDrag(upEvent.pointerId, false);
     };
 
     const onWindowPointerCancel = (cancelEvent: PointerEvent) => {
-      finishDrag(cancelEvent.pointerId);
+      finishDrag(cancelEvent.pointerId, true);
     };
 
     const onWindowBlur = () => {
-      finishDrag(null);
+      finishDrag(null, true);
     };
 
     window.addEventListener("pointermove", onWindowPointerMove);
@@ -483,20 +777,26 @@ function MediaDialLauncher({
     if (!tile) {
       return;
     }
+    getDialAudio().unlock();
     if (idx === safeSelectedIndex) {
       onLaunchTile(tile.id);
       return;
     }
+    userActivatedRef.current = true;
     keyboardNavRef.current = false;
+    animationModeRef.current = "idle";
     setSelectedIndex(idx);
   };
 
   const cycleSelection = (delta: number) => {
+    getDialAudio().unlock();
     const next = wrapTileIndex(safeSelectedIndex + delta, count);
     if (next === safeSelectedIndex) {
       return;
     }
+    userActivatedRef.current = true;
     keyboardNavRef.current = false;
+    animationModeRef.current = "idle";
     setSelectedIndex(next);
   };
 
@@ -520,8 +820,11 @@ function MediaDialLauncher({
     }
     event.preventDefault();
     event.stopPropagation();
+    getDialAudio().unlock();
     if (nextIndex !== safeSelectedIndex) {
+      userActivatedRef.current = true;
       keyboardNavRef.current = true;
+      animationModeRef.current = "idle";
       setSelectedIndex(nextIndex);
     }
   };
@@ -654,7 +957,7 @@ function MediaDialLauncher({
             height: "calc(var(--dial-r) * 1.46)",
           }}
         >
-          {/* Semi-Circular Track + Planetary Hollow Core + Annular Scrub Path */}
+          {/* Semi-Circular Track + Planetary Hollow Core + Rotating Bezel Ticks + Scrub Surface */}
           <svg
             viewBox="-330 -330 660 330"
             className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2"
@@ -674,9 +977,15 @@ function MediaDialLauncher({
               </radialGradient>
             </defs>
 
-            {/* Whisper-faint planetary core inside R < 155 (100% non-interactive) */}
+            {/* Whisper-faint planetary core inside R < 138 (100% non-interactive) */}
             <g aria-hidden="true" opacity="0.9">
-              <circle cx="0" cy="0" r="132" fill={`url(#${planetGlowId})`} clipPath={`url(#${planetClipId})`} />
+              <circle
+                cx="0"
+                cy="0"
+                r="132"
+                fill={`url(#${planetGlowId})`}
+                clipPath={`url(#${planetClipId})`}
+              />
               <g clipPath={`url(#${planetClipId})`}>
                 <path
                   d="M -124 -46 Q 0 -30 124 -46"
@@ -725,7 +1034,7 @@ function MediaDialLauncher({
               />
             </g>
 
-            {/* Hairline Outer & Inner Track Arcs + Top 0° Selection Pip */}
+            {/* Hairline Outer & Inner Track Arcs */}
             <path
               aria-hidden="true"
               d="M -320 0 A 320 320 0 0 1 320 0"
@@ -740,26 +1049,48 @@ function MediaDialLauncher({
               stroke="rgba(255, 255, 255, 0.11)"
               strokeWidth="1"
             />
-            <g aria-hidden="true">
+
+            {/* Rotating Bezel Tick Ring */}
+            <g ref={bezelTicksRef} aria-hidden="true">
+              {bezelTicks.map((tick) => (
+                <line
+                  key={tick.key}
+                  x1={tick.x1}
+                  y1={tick.y1}
+                  x2={tick.x2}
+                  y2={tick.y2}
+                  stroke={
+                    tick.major
+                      ? "rgba(255, 255, 255, 0.34)"
+                      : "rgba(255, 255, 255, 0.16)"
+                  }
+                  strokeWidth={tick.major ? 1.6 : 1.1}
+                  strokeLinecap="round"
+                />
+              ))}
+            </g>
+
+            {/* Top 0° Selection Reticle Pip (pulses on detent crossings) */}
+            <g ref={reticleRef} aria-hidden="true">
               <line
                 x1="0"
-                y1="-328"
+                y1="-326"
                 x2="0"
-                y2="-316"
-                stroke="rgba(var(--service-rgb), 0.78)"
+                y2="-319"
+                stroke="rgba(var(--service-rgb), 0.85)"
                 strokeWidth="2.4"
                 strokeLinecap="round"
               />
-              <circle cx="0" cy="-311" r="2" fill="rgba(var(--service-rgb), 0.72)" />
+              <circle cx="0" cy="-315" r="2" fill="rgba(var(--service-rgb), 0.78)" />
             </g>
 
-            {/* Invisible Annular Scrub Surface (R = 155..320) */}
+            {/* Widened Invisible Annular Scrub Surface (R = 138..330) */}
             <path
               data-dial-ring="true"
-              d="M -237.5 0 A 237.5 237.5 0 0 1 237.5 0"
+              d="M -234 0 A 234 234 0 0 1 234 0"
               fill="none"
               stroke="transparent"
-              strokeWidth={165}
+              strokeWidth={192}
               strokeLinecap="butt"
               style={{ pointerEvents: "stroke" }}
               aria-hidden="true"
