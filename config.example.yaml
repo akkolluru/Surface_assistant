@@ -3,7 +3,8 @@
 display:
   clock_format: "12h"
   temperature_unit: "C"
-  wallpaper_interval_seconds: 180
+  wallpaper_interval_seconds: 7200  # 2 hours (3600 = 1h, 10800 = 3h)
+  wallpaper_shuffle: true
   night_mode:
     enter_lux: 5
     exit_lux: 15

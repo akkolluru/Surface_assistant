@@ -151,6 +151,7 @@ def build_runtime(config: AppConfig | None = None) -> DaemonRuntime:
     wallpapers = WallpaperService(
         cfg.wallpapers_path,
         interval_seconds=cfg.yaml_cfg.display.wallpaper_interval_seconds,
+        shuffle=cfg.yaml_cfg.display.wallpaper_shuffle,
     )
 
     runtime = DaemonRuntime(
@@ -323,6 +324,12 @@ def create_app(
     @app.post("/api/wallpapers/next")
     async def next_wallpaper() -> dict[str, Any]:
         wp_state = rt.wallpapers.next_wallpaper()
+        await rt.broadcast_state()
+        return wp_state.model_dump()
+
+    @app.post("/api/wallpapers/refresh")
+    async def refresh_wallpapers() -> dict[str, Any]:
+        wp_state = rt.wallpapers.refresh()
         await rt.broadcast_state()
         return wp_state.model_dump()
 

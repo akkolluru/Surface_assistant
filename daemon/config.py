@@ -31,7 +31,8 @@ class NightModeConfig(BaseModel):
 class DisplayConfig(BaseModel):
     clock_format: Literal["12h", "24h"] = "12h"
     temperature_unit: Literal["C", "F"] = "C"
-    wallpaper_interval_seconds: int = 180
+    wallpaper_interval_seconds: int = 7200
+    wallpaper_shuffle: bool = True
     night_mode: NightModeConfig = Field(default_factory=NightModeConfig)
 
 

@@ -84,7 +84,7 @@ class WallpaperState(BaseModel):
     """Current wallpaper rotation state."""
 
     current_index: int = 0
-    interval_seconds: int = 180
+    interval_seconds: int = 7200
     items: list[WallpaperItem] = Field(default_factory=list)
 
 

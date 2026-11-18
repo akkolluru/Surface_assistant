@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 from daemon.models import MediaKind, WallpaperItem, WallpaperState
@@ -14,13 +15,35 @@ BUNDLED_ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "wallpapers"
 class WallpaperService:
     """Indexes ~/wallpapers/static and ~/wallpapers/loops with path-traversal protection."""
 
-    def __init__(self, wallpapers_root: Path, interval_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        wallpapers_root: Path,
+        interval_seconds: int = 7200,
+        *,
+        shuffle: bool = False,
+        rng: random.Random | None = None,
+    ) -> None:
         self._root = wallpapers_root
         self._interval_seconds = interval_seconds
+        self._shuffle = shuffle
+        self._rng = rng or random.Random()
         self._items: list[WallpaperItem] = []
         self._file_map: dict[str, Path] = {}
         self._current_index = 0
         self.refresh()
+
+    def _shuffle_items(
+        self,
+        items: list[WallpaperItem],
+        *,
+        avoid_first_id: str | None = None,
+    ) -> list[WallpaperItem]:
+        shuffled = list(items)
+        self._rng.shuffle(shuffled)
+        if avoid_first_id is not None and len(shuffled) > 1 and shuffled[0].id == avoid_first_id:
+            swap_idx = self._rng.randrange(1, len(shuffled))
+            shuffled[0], shuffled[swap_idx] = shuffled[swap_idx], shuffled[0]
+        return shuffled
 
     def refresh(self) -> WallpaperState:
         items: list[WallpaperItem] = []
@@ -75,10 +98,14 @@ class WallpaperService:
                         )
                     )
 
+        if self._shuffle and len(items) > 1:
+            items = self._shuffle_items(items)
+            self._current_index = 0
+        elif self._current_index >= len(items):
+            self._current_index = 0
+
         self._items = items
         self._file_map = file_map
-        if self._current_index >= len(self._items):
-            self._current_index = 0
         return self.state
 
     @property
@@ -92,8 +119,17 @@ class WallpaperService:
     def next_wallpaper(self) -> WallpaperState:
         if not self._items:
             self.refresh()
-        if self._items:
-            self._current_index = (self._current_index + 1) % len(self._items)
+        if not self._items:
+            return self.state
+
+        next_index = self._current_index + 1
+        if next_index >= len(self._items):
+            if self._shuffle and len(self._items) > 1:
+                last_id = self._items[self._current_index].id
+                self._items = self._shuffle_items(self._items, avoid_first_id=last_id)
+            self._current_index = 0
+        else:
+            self._current_index = next_index
         return self.state
 
     def resolve_file(self, item_id: str) -> Path | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import threading
 from pathlib import Path
@@ -96,6 +97,32 @@ def test_wallpaper_service_falls_back_to_bundled_assets(tmp_path: Path) -> None:
     first = svc.state.items[0]
     resolved = svc.resolve_file(first.id)
     assert resolved is not None and resolved.exists()
+
+
+def test_wallpaper_service_shuffle_mixes_and_avoids_repeat_on_wrap(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]
+    for name in names:
+        (static_dir / name).write_bytes(b"img")
+
+    svc = WallpaperService(tmp_path, shuffle=True, rng=random.Random(7))
+    first_cycle = [item.filename for item in svc.state.items]
+    assert sorted(first_cycle) == names
+    assert first_cycle != names
+
+    for idx in range(len(names) - 1):
+        state = svc.next_wallpaper()
+        assert state.current_index == idx + 1
+
+    last_item_id = svc.state.items[-1].id
+    wrapped = svc.next_wallpaper()
+    assert wrapped.current_index == 0
+    assert wrapped.items[0].id != last_item_id
+    assert sorted(item.filename for item in wrapped.items) == names
+    for item in wrapped.items:
+        resolved = svc.resolve_file(item.id)
+        assert resolved is not None and resolved.exists()
 
 
 @pytest.mark.asyncio

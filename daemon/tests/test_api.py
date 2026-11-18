@@ -52,3 +52,26 @@ def test_rest_and_websocket_state_flow(tmp_path: Path) -> None:
     root_resp = client.get("/")
     assert root_resp.status_code == 200
     assert "Surface Bedside Hub" in root_resp.text
+
+
+def test_wallpaper_refresh_and_file_endpoints(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "first.jpg").write_bytes(b"jpeg-one")
+
+    client = _make_test_client(tmp_path)
+    state = client.get("/api/state").json()
+    assert [item["filename"] for item in state["wallpapers"]["items"]] == ["first.jpg"]
+
+    (static_dir / "second.png").write_bytes(b"png-two")
+    refreshed = client.post("/api/wallpapers/refresh")
+    assert refreshed.status_code == 200
+    items = refreshed.json()["items"]
+    assert {item["filename"] for item in items} == {"first.jpg", "second.png"}
+
+    for item in items:
+        file_resp = client.get(item["url"])
+        assert file_resp.status_code == 200
+
+    missing = client.get("/api/wallpapers/file/nonexistent")
+    assert missing.status_code == 404
