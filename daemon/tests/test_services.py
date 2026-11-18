@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -269,3 +270,119 @@ def test_sway_backend_passes_resolved_env_to_subprocess(
     assert popen_calls[1][0] == ["stremio"]
     assert popen_calls[1][1]["SWAYSOCK"] == str(sway_sock)
     assert popen_calls[1][1]["WAYLAND_DISPLAY"] == "wayland-1"
+
+
+def test_launch_tile_relaunches_when_active_process_exited() -> None:
+    clock = FakeClock()
+    comp = MockCompositorBackend()
+    night = AmbientNightModeController(MockAmbientBackend(), NightModeConfig(), clock=clock)
+    tiles = [
+        MediaTileConfig(
+            id="youtube",
+            label="YouTube",
+            kind="browser_app",
+            target="https://youtube.com",
+        ),
+    ]
+    svc = MediaService(comp, tiles, "brave-browser", night, clock=clock)
+
+    svc.launch_tile("youtube")
+    assert comp.launch_count == 1
+    assert svc.state.active_tile_id == "youtube"
+
+    # Launching same tile while process is alive only focuses 2:media without relaunching
+    comp.focus_workspace("1:hub")
+    svc.launch_tile("youtube")
+    assert comp.launch_count == 1
+    assert comp.workspace == "2:media"
+
+    # If the process exits while active_tile_id is still set, launch_tile must relaunch
+    comp._active_alive = False
+    svc.launch_tile("youtube")
+    assert comp.launch_count == 2
+    assert comp.is_active_alive() is True
+    assert svc.state.active_tile_id == "youtube"
+
+    # And state/get_state() clears active_tile_id, active_workspace, and paused_for_video
+    # if process is no longer alive
+    comp._active_alive = False
+    state_after_exit = svc.get_state()
+    assert state_after_exit.active_tile_id is None
+    assert state_after_exit.active_workspace == "1:hub"
+    assert night.state.paused_for_video is False
+
+
+def test_sway_backend_unexpected_exit_focuses_hub_and_clears_active_tile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "sway-ipc.1000.42.sock").touch()
+    (tmp_path / "wayland-1").touch()
+
+    run_calls: list[list[str]] = []
+    exit_event = threading.Event()
+    callback_done = threading.Event()
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        run_calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    class ControllableProc:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self) -> int:
+            exit_event.wait(timeout=2.0)
+            self.returncode = 1
+            return 1
+
+        def terminate(self) -> None:
+            self.returncode = -15
+            exit_event.set()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: ControllableProc())
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    backend = SwayCompositorBackend(runtime_dir=tmp_path)
+    clock = FakeClock()
+    night = AmbientNightModeController(MockAmbientBackend(), NightModeConfig(), clock=clock)
+    tiles = [
+        MediaTileConfig(
+            id="youtube",
+            label="YouTube",
+            kind="browser_app",
+            target="https://youtube.com",
+        ),
+    ]
+    svc = MediaService(backend, tiles, "brave-browser", night, clock=clock)
+
+    svc.launch_tile("youtube")
+    assert backend.is_active_alive() is True
+    assert svc.state.active_tile_id == "youtube"
+
+    orig_focus = backend.focus_workspace
+
+    def tracking_focus(workspace: Any) -> None:
+        orig_focus(workspace)
+        if workspace == "1:hub":
+            callback_done.set()
+
+    monkeypatch.setattr(backend, "focus_workspace", tracking_focus)
+
+    # Simulate unexpected process exit
+    exit_event.set()
+    assert callback_done.wait(timeout=2.0) is True
+    for _ in range(20):
+        if svc._state.active_tile_id is None:
+            break
+        threading.Event().wait(0.01)
+
+    assert backend.is_active_alive() is False
+    assert ["swaymsg", "workspace", "1:hub"] in run_calls
+    assert svc.state.active_tile_id is None
+    assert svc.state.active_workspace == "1:hub"
+    assert night.state.paused_for_video is False

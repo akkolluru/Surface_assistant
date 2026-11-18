@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,7 +20,15 @@ _LOGGER = logging.getLogger(__name__)
 class CompositorBackend(Protocol):
     """Abstraction over Sway Wayland IPC + MPRIS player control."""
 
-    def launch_tile(self, tile: MediaTileConfig, browser_bin: str) -> None:
+    def is_active_alive(self) -> bool:
+        """Return True if the currently launched media process is still alive."""
+
+    def launch_tile(
+        self,
+        tile: MediaTileConfig,
+        browser_bin: str,
+        on_exit: Callable[[], None] | None = None,
+    ) -> None:
         """Launch a browser --app or native desktop client on Workspace 2."""
 
     def focus_workspace(self, workspace: Literal["1:hub", "2:media"]) -> None:
@@ -38,17 +47,33 @@ class MockCompositorBackend:
     def __init__(self) -> None:
         self.workspace: Literal["1:hub", "2:media"] = "1:hub"
         self.launched_tile: MediaTileConfig | None = None
+        self.launch_count = 0
         self.paused_count = 0
         self.closed_count = 0
+        self._active_alive = False
+        self._on_exit: Callable[[], None] | None = None
 
-    def launch_tile(self, tile: MediaTileConfig, browser_bin: str) -> None:
+    def is_active_alive(self) -> bool:
+        return self._active_alive
+
+    def launch_tile(
+        self,
+        tile: MediaTileConfig,
+        browser_bin: str,
+        on_exit: Callable[[], None] | None = None,
+    ) -> None:
         self.launched_tile = tile
+        self.launch_count += 1
         self.workspace = "2:media"
+        self._active_alive = True
+        self._on_exit = on_exit
 
     def focus_workspace(self, workspace: Literal["1:hub", "2:media"]) -> None:
         self.workspace = workspace
 
     def close_media_workspace(self) -> None:
+        self._active_alive = False
+        self._on_exit = None
         self.launched_tile = None
         self.closed_count += 1
 
@@ -166,7 +191,15 @@ class SwayCompositorBackend:
         except OSError as err:
             _LOGGER.warning("swaymsg failed: %s", err)
 
-    def launch_tile(self, tile: MediaTileConfig, browser_bin: str) -> None:
+    def is_active_alive(self) -> bool:
+        return self._active_proc is not None and self._active_proc.poll() is None
+
+    def launch_tile(
+        self,
+        tile: MediaTileConfig,
+        browser_bin: str,
+        on_exit: Callable[[], None] | None = None,
+    ) -> None:
         self.focus_workspace("2:media")
         if tile.kind == "browser_app":
             media_profile_dir = Path.home() / ".local/share/surface-assistant/media-profile"
@@ -187,26 +220,44 @@ class SwayCompositorBackend:
             cmd = [tile.target]
 
         try:
-            self._active_proc = subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 env=self._build_env(),
             )
+            self._active_proc = proc
             self._swaymsg('[workspace="2:media"]', "fullscreen", "enable")
         except OSError as err:
             _LOGGER.error("Failed launching tile %s: %s", tile.id, err)
             raise
 
+        def _watch_proc() -> None:
+            wait_fn = getattr(proc, "wait", None)
+            if not callable(wait_fn):
+                return
+            try:
+                wait_fn()
+            except Exception:
+                return
+            if self._active_proc is proc:
+                self._active_proc = None
+                if on_exit is not None:
+                    on_exit()
+                self.focus_workspace("1:hub")
+
+        threading.Thread(target=_watch_proc, daemon=True).start()
+
     def focus_workspace(self, workspace: Literal["1:hub", "2:media"]) -> None:
         self._swaymsg("workspace", workspace)
 
     def close_media_workspace(self) -> None:
-        self._swaymsg('[workspace="2:media"]', "kill")
-        if self._active_proc is not None and self._active_proc.poll() is None:
-            self._active_proc.terminate()
+        proc = self._active_proc
         self._active_proc = None
+        self._swaymsg('[workspace="2:media"]', "kill")
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
 
     def pause_mpris(self) -> None:
         try:
@@ -240,10 +291,20 @@ class MediaService:
         self._state = MediaState()
         self._sleep_deadline: float | None = None
 
+    def _clear_inactive_session(self) -> None:
+        self._state.active_tile_id = None
+        self._state.active_workspace = "1:hub"
+        self._night_mode.set_video_active(False)
+
     @property
     def state(self) -> MediaState:
+        if self._state.active_tile_id is not None and not self._backend.is_active_alive():
+            self._clear_inactive_session()
         self._refresh_remaining()
         return self._state.model_copy()
+
+    def get_state(self) -> MediaState:
+        return self.state
 
     def _refresh_remaining(self) -> None:
         if self._sleep_deadline is None:
@@ -257,19 +318,30 @@ class MediaService:
         if tile is None:
             raise KeyError(f"Unknown media tile: {tile_id}")
 
-        # Single active video window policy: reuse same window if already open,
+        # Single active video window policy: reuse same window if already open and alive,
         # otherwise close previous video app before launching a new tile.
-        if self._state.active_tile_id == tile_id:
+        if self._state.active_tile_id == tile_id and self._backend.is_active_alive():
             self._backend.focus_workspace("2:media")
+            self._state.active_workspace = "2:media"
+            self._night_mode.set_video_active(True)
         else:
-            if self._state.active_tile_id is not None:
+            if self._state.active_tile_id is not None and self._backend.is_active_alive():
                 self._backend.pause_mpris()
                 self._backend.close_media_workspace()
-            self._backend.launch_tile(tile, self._browser_bin)
-            self._state.active_tile_id = tile_id
 
-        self._state.active_workspace = "2:media"
-        self._night_mode.set_video_active(True)
+            def _on_exit() -> None:
+                if self._state.active_tile_id in (tile_id, None):
+                    self._clear_inactive_session()
+
+            self._state.active_tile_id = tile_id
+            self._state.active_workspace = "2:media"
+            self._night_mode.set_video_active(True)
+            try:
+                self._backend.launch_tile(tile, self._browser_bin, on_exit=_on_exit)
+            except Exception:
+                self._clear_inactive_session()
+                raise
+
         return self.state
 
     def return_home(self) -> MediaState:
