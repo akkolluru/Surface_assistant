@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from typing import Any
 
 from pytest import MonkeyPatch
 
@@ -156,3 +158,123 @@ def test_load_config_resolves_primary_phone_name(tmp_path: Path) -> None:
     custom_env = EnvSettings(primary_phone_name="Custom Pixel")
     loaded_custom = load_config(config_path=cfg_file, env_settings=custom_env)
     assert loaded_custom.yaml_cfg.kde_connect.primary_phone_name == "Custom Pixel"
+
+
+
+def test_kde_list_devices_and_read_battery_dbus(monkeypatch: MonkeyPatch) -> None:
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd == ["kdeconnect-cli", "--list-devices"]:
+            stdout = "\n".join(
+                [
+                    "- Google Pixel 10 Pro: pixel-10 (paired and reachable)",
+                    "- Work Laptop: laptop-1 (paired and reachable)",
+                    "- Galaxy Tab S9: tab-9 (paired)",
+                    "unparsed header line",
+                ]
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+        joined = " ".join(cmd)
+        if "/devices/pixel-10/battery" in joined and cmd[-1] == "charge":
+            return subprocess.CompletedProcess(cmd, 0, stdout="(<84>,)\n", stderr="")
+        if "/devices/pixel-10/battery" in joined and cmd[-1] == "isCharging":
+            return subprocess.CompletedProcess(cmd, 0, stdout="(<true>,)\n", stderr="")
+        if "/devices/laptop-1/battery" in joined and cmd[-1] == "charge":
+            return subprocess.CompletedProcess(cmd, 0, stdout="(<-1>,)\n", stderr="")
+        if "/devices/laptop-1/battery" in joined and cmd[-1] == "isCharging":
+            return subprocess.CompletedProcess(cmd, 0, stdout="(<false>,)\n", stderr="")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    backend = KdeConnectCliBackend(primary_phone_name="Google Pixel 10 Pro")
+    devices = backend.list_devices()
+
+    assert len(devices) == 3
+    assert devices[0] == ConnectedDevice(
+        id="pixel-10",
+        name="Google Pixel 10 Pro",
+        device_type="phone",
+        reachable=True,
+        battery_percent=84,
+        charging=True,
+    )
+    assert devices[1] == ConnectedDevice(
+        id="laptop-1",
+        name="Work Laptop",
+        device_type="laptop",
+        reachable=True,
+        battery_percent=None,
+        charging=False,
+    )
+    assert devices[2] == ConnectedDevice(
+        id="tab-9",
+        name="Galaxy Tab S9",
+        device_type="tablet",
+        reachable=False,
+        battery_percent=None,
+        charging=False,
+    )
+
+    # Missing kdeconnect-cli binary returns empty device list
+    def fail_run(*args: Any, **kwargs: Any) -> Any:
+        raise FileNotFoundError("kdeconnect-cli missing")
+
+    monkeypatch.setattr(subprocess, "run", fail_run)
+    assert backend.list_devices() == []
+    assert backend._read_battery_dbus("pixel-10") == (None, False)
+
+
+def test_kde_reply_whatsapp_success_and_failure_paths(monkeypatch: MonkeyPatch) -> None:
+    backend = KdeConnectCliBackend(primary_phone_name="Google Pixel 10 Pro")
+    monkeypatch.setattr(
+        backend,
+        "list_devices",
+        lambda: [_phone("pixel-id", "Google Pixel 10 Pro")],
+    )
+
+    sent_calls: list[list[str]] = []
+
+    def fake_run(args: list[str], timeout: float = 3.0) -> str | None:
+        sent_calls.append(args)
+        if args[-1].endswith("activeNotifications"):
+            return "(['notif-other', 'notif-wa'],)"
+        if args[-1] == "org.kde.kdeconnect.device.notifications.notification":
+            if any(arg.endswith("/notif-other") for arg in args):
+                return "({'appName': <'Gmail'>, 'title': <'Alice'>},)"
+            if any(arg.endswith("/notif-wa") for arg in args):
+                return (
+                    "({'appName': <'WhatsApp'>, 'title': <'Alice'>, "
+                    "'replyId': <'wa-reply-99'>},)"
+                )
+        if "sendReply" in args[-3]:
+            return "()"
+        return None
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    ok, detail = backend.reply_whatsapp("Alice", "On my way!")
+    assert ok is True
+    assert detail == "Replied to Alice on WhatsApp."
+    assert any(
+        call[-3:] == [
+            "org.kde.kdeconnect.device.notifications.sendReply",
+            "wa-reply-99",
+            "On my way!",
+        ]
+        for call in sent_calls
+    )
+
+    # Non-matching sender returns failure
+    ok_missing, msg_missing = backend.reply_whatsapp("Bob", "Hey")
+    assert ok_missing is False
+    assert msg_missing == "No recent replyable WhatsApp notification from Bob."
+
+    # Empty activeNotifications returns clear error
+    monkeypatch.setattr(backend, "_run", lambda args, timeout=3.0: None)
+    ok_empty, msg_empty = backend.reply_whatsapp("Alice", "Hello")
+    assert ok_empty is False
+    assert msg_empty == "No active notifications available to reply to."
+
+    # No reachable phones returns clear error
+    monkeypatch.setattr(backend, "list_devices", lambda: [])
+    ok_no_phone, msg_no_phone = backend.reply_whatsapp("Alice", "Hello")
+    assert ok_no_phone is False
+    assert msg_no_phone == "No reachable paired phone found in KDE Connect."

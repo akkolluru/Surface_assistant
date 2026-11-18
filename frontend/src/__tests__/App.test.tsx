@@ -751,4 +751,153 @@ describe("Surface Assistant Kiosk UI", () => {
     expect(tracker[0]!.createBufferSource).toHaveBeenCalled();
     expect(tracker[0]!.createOscillator).toHaveBeenCalled();
   });
+
+  it("surfaces DaemonApiError detail on HTTP 500 launch failure outside inert panes and falls back on network failure", async () => {
+    vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
+    vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue(DEFAULT_DAEMON_SNAPSHOT);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/media/launch") {
+        return new Response(
+          JSON.stringify({ detail: "Failed to launch stremio: binary missing" }),
+          {
+            status: 500,
+            statusText: "Internal Server Error",
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Stremio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch Stremio" }));
+
+    const notifications = screen.getByRole("region", { name: "Notifications" });
+    expect(notifications.closest("[inert]")).toBeNull();
+    const assertiveLive = notifications.querySelector('[aria-live="assertive"]');
+    expect(assertiveLive).not.toBeNull();
+
+    await waitFor(() =>
+      expect(assertiveLive).toHaveTextContent("Failed to launch stremio: binary missing")
+    );
+    expect(screen.queryByText("Could not reach hardware daemon.")).not.toBeInTheDocument();
+
+    // Network failure (non-DaemonApiError) still falls back to unreachable message
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    fireEvent.click(screen.getByRole("button", { name: "Launch Stremio" }));
+    await waitFor(() =>
+      expect(assertiveLive).toHaveTextContent("Could not reach hardware daemon.")
+    );
+  });
+
+  it("ignores concurrent duplicate taps while media launch request is pending", async () => {
+    vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
+    vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue(DEFAULT_DAEMON_SNAPSHOT);
+
+    let resolveLaunch!: (value: (typeof DEFAULT_DAEMON_SNAPSHOT)["media"]) => void;
+    const pendingLaunch = new Promise<(typeof DEFAULT_DAEMON_SNAPSHOT)["media"]>((resolve) => {
+      resolveLaunch = resolve;
+    });
+    const launchSpy = vi
+      .spyOn(daemonSocket.daemonApi, "launchMedia")
+      .mockReturnValueOnce(pendingLaunch);
+
+    render(<App />);
+    await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
+    const launchBtn = screen.getByRole("button", { name: "Launch YouTube" });
+
+    fireEvent.click(launchBtn);
+    fireEvent.click(launchBtn);
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveLaunch({
+        active_workspace: "2:media",
+        active_tile_id: "youtube",
+        sleep_timer_remaining_seconds: null,
+      });
+      await pendingLaunch;
+    });
+
+    expect(screen.getByText("Now Playing")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume YouTube" })).toBeInTheDocument();
+  });
+
+  it("renders lower-deck Close <App> button when activeTileId is active and calls closeMedia", async () => {
+    vi.spyOn(daemonSocket, "connectDaemonSocket").mockImplementation(() => () => {});
+    vi.spyOn(daemonSocket.daemonApi, "fetchState").mockResolvedValue({
+      ...DEFAULT_DAEMON_SNAPSHOT,
+      media: {
+        active_workspace: "2:media",
+        active_tile_id: "netflix",
+        sleep_timer_remaining_seconds: null,
+      },
+    });
+    const closeSpy = vi.spyOn(daemonSocket.daemonApi, "closeMedia").mockResolvedValue({
+      active_workspace: "1:hub",
+      active_tile_id: null,
+      sleep_timer_remaining_seconds: null,
+    });
+
+    render(<App />);
+    await waitFor(() => expect(daemonSocket.daemonApi.fetchState).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /Go to Bedside Theater/i }));
+    expect(screen.getByText("Now Playing")).toBeInTheDocument();
+
+    const closeBtn = screen.getByRole("button", { name: "Close running Netflix" });
+    expect(closeBtn).toHaveClass("touch-target");
+    expect(closeBtn).toHaveTextContent("Close Netflix");
+
+    fireEvent.click(closeBtn);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Now Playing")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Close running Netflix" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("clears scrub-ring click suppression immediately after drag release on path[data-dial-ring]", () => {
+    vi.stubGlobal("PointerEvent", FakePointerEvent);
+    const onLaunch = vi.fn();
+
+    const { container } = render(
+      <MediaLauncher
+        tiles={DEFAULT_DAEMON_SNAPSHOT.tiles}
+        activeTileId={null}
+        onLaunchTile={onLaunch}
+        onNavigateHub={vi.fn()}
+      />
+    );
+
+    const scrubPath = container.querySelector("path[data-dial-ring]");
+    expect(scrubPath).not.toBeNull();
+
+    // Drag along the scrub ring and release with the browser's trailing click on the SVG path
+    fireEvent.pointerDown(scrubPath!, { pointerId: 1, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(scrubPath!, { pointerId: 1, clientX: 280, clientY: 300 });
+    fireEvent.pointerUp(scrubPath!, { pointerId: 1, clientX: 280, clientY: 300 });
+    const ringClickAllowed = fireEvent.click(scrubPath!);
+    expect(ringClickAllowed).toBe(false);
+    expect(onLaunch).not.toHaveBeenCalled();
+
+    // Next tap within < 150ms (without advancing timers) must NOT be swallowed by stale suppression
+    const centeredBtn = screen.getByRole("button", { name: "Launch YouTube" });
+    const nextClickAllowed = fireEvent.click(centeredBtn);
+    expect(nextClickAllowed).toBe(true);
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    expect(onLaunch).toHaveBeenCalledWith("youtube");
+  });
 });
