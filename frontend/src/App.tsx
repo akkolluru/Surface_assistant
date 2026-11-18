@@ -292,7 +292,7 @@ function KioskHub() {
     suppressClickRef.current = false;
 
     const target = event.target as HTMLElement | null;
-    if (target?.closest("input, select, textarea, [role='slider']")) {
+    if (target?.closest("input, select, textarea, [role='slider'], [data-dial-ring]")) {
       return;
     }
     dragRef.current = {
