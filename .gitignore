@@ -30,6 +30,9 @@ whisper-data/
 piper-data/
 openwakeword-data/
 
+# Local media assets (synced separately to ~/wallpapers)
+wallpapers/
+
 # OS / Editor
 .DS_Store
 *.swp

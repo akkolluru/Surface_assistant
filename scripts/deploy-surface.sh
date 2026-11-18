@@ -13,6 +13,7 @@ SURFACE_DIR="${SURFACE_DIR:-~/Surface_assistant}"
 
 RESTART=false
 SYNC_SYSTEM=false
+SYNC_WALLPAPERS=false
 DRY_RUN=false
 
 usage() {
@@ -22,10 +23,11 @@ Usage: ./scripts/deploy-surface.sh [OPTIONS]
 Sync the repository from Mac to the Surface Pro 5 using rsync over SSH.
 
 Options:
-  --sync-system  Install Sway, Waybar, PipeWire, systemd user units, and helper scripts on Surface
-  --restart      Run `systemctl --user restart surface-daemon.service` over SSH after sync
-  --dry-run      Pass --dry-run to rsync and print (do not run) remote commands
-  -h, --help     Show this help message and exit
+  --sync-system      Install Sway, Waybar, PipeWire, systemd user units, and helper scripts on Surface
+  --sync-wallpapers  Sync local ./wallpapers/ into ~/wallpapers/static/ on Surface
+  --restart          Run `systemctl --user restart surface-daemon.service` over SSH after sync
+  --dry-run          Pass --dry-run to rsync and print (do not run) remote commands
+  -h, --help         Show this help message and exit
 
 Environment Variables:
   SURFACE_USER   SSH username (default: time-master)
@@ -38,6 +40,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --sync-system)
       SYNC_SYSTEM=true
+      shift
+      ;;
+    --sync-wallpapers)
+      SYNC_WALLPAPERS=true
       shift
       ;;
     --restart)
@@ -99,6 +105,7 @@ RSYNC_ARGS=(
   --exclude='.mypy_cache/'
   --exclude='.ruff_cache/'
   --exclude='.DS_Store'
+  --exclude='wallpapers/'
   --exclude='homeassistant/data/'
   --exclude='homeassistant/.storage/'
   --exclude='homeassistant/home-assistant_v2.db*'
@@ -165,6 +172,15 @@ fi'
     echo "Syncing system configs and user units on ${REMOTE_TARGET}..."
     ssh "${REMOTE_TARGET}" "${SYNC_CMD}"
   fi
+fi
+
+if [[ "${SYNC_WALLPAPERS}" == "true" ]]; then
+  WALLPAPER_ARGS=()
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    WALLPAPER_ARGS+=(--dry-run)
+  fi
+  SURFACE_USER="${SURFACE_USER}" SURFACE_HOST="${SURFACE_HOST}" \
+    bash "${REPO_ROOT}/scripts/sync-wallpapers.sh" "${WALLPAPER_ARGS[@]}"
 fi
 
 if [[ "${RESTART}" == "true" ]]; then
