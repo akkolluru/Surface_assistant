@@ -2,19 +2,55 @@
 
 from __future__ import annotations
 
+import inspect
+import json
 import logging
 import os
+import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from daemon.ambient_light import AmbientNightModeController
 from daemon.models import MediaState, MediaTileConfig
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _iter_workspace_nodes(node: dict[str, Any]) -> list[dict[str, Any]]:
+    workspaces: list[dict[str, Any]] = []
+    if node.get("type") == "workspace":
+        workspaces.append(node)
+        return workspaces
+    for child in node.get("nodes", []):
+        if isinstance(child, dict):
+            workspaces.extend(_iter_workspace_nodes(child))
+    return workspaces
+
+
+def _node_has_windows(node: dict[str, Any]) -> bool:
+    node_type = node.get("type")
+    children = [*node.get("nodes", []), *node.get("floating_nodes", [])]
+    if node_type in ("con", "floating_con") and (
+        node.get("pid") is not None
+        or node.get("app_id") is not None
+        or node.get("window") is not None
+        or not children
+    ):
+        return True
+    return any(isinstance(child, dict) and _node_has_windows(child) for child in children)
+
+
+def _node_is_focused(node: dict[str, Any]) -> bool:
+    if node.get("focused") is True:
+        return True
+    children = [*node.get("nodes", []), *node.get("floating_nodes", [])]
+    return any(isinstance(child, dict) and _node_is_focused(child) for child in children)
 
 
 class CompositorBackend(Protocol):
@@ -80,6 +116,14 @@ class MockCompositorBackend:
     def pause_mpris(self) -> None:
         self.paused_count += 1
 
+    def workspace_has_windows(self, workspace: str) -> bool | None:
+        """Return True when the simulated media workspace has an active window."""
+        return workspace == "2:media" and self._active_alive
+
+    def focused_workspace(self) -> str | None:
+        """Return the currently focused simulated workspace."""
+        return self.workspace
+
 
 class SwayCompositorBackend:
     """Executes Sway IPC commands via swaymsg and launches Brave/Stremio."""
@@ -92,6 +136,8 @@ class SwayCompositorBackend:
         self._runtime_dir = runtime_dir
         self._x11_unix_dir = x11_unix_dir
         self._active_proc: subprocess.Popen[bytes] | None = None
+        self._active_tile_id: str | None = None
+        self._launch_started_at: float | None = None
 
     def _resolve_runtime_dir(self) -> Path:
         """Return the runtime directory where Sway and Wayland sockets reside."""
@@ -165,8 +211,29 @@ class SwayCompositorBackend:
         )
         return f":{sock.name.removeprefix('X')}" if sock is not None else None
 
+    @staticmethod
+    def _resolve_xdg_data_dirs(existing: str) -> str:
+        """Ensure Flatpak export paths are present in XDG_DATA_DIRS."""
+        raw = existing.strip()
+        parts = (
+            [entry for entry in raw.split(":") if entry]
+            if raw
+            else ["/usr/local/share", "/usr/share"]
+        )
+        normalized = {entry.rstrip("/") or "/" for entry in parts}
+        flatpak_dirs = (
+            "/var/lib/flatpak/exports/share",
+            f"{Path.home()}/.local/share/flatpak/exports/share",
+        )
+        for flatpak_dir in flatpak_dirs:
+            norm = flatpak_dir.rstrip("/") or "/"
+            if norm not in normalized:
+                parts.append(flatpak_dir)
+                normalized.add(norm)
+        return ":".join(parts)
+
     def _build_env(self) -> dict[str, str]:
-        """Build subprocess environment with resolved Sway, Wayland, and X11 IPC variables."""
+        """Build subprocess environment with resolved Sway, Wayland, X11, and DBus variables."""
         env = os.environ.copy()
         swaysock = self._resolve_swaysock()
         if swaysock is not None:
@@ -177,7 +244,73 @@ class SwayCompositorBackend:
         display = self._resolve_display()
         if display is not None:
             env["DISPLAY"] = display
+        if not env.get("DBUS_SESSION_BUS_ADDRESS", "").strip():
+            bus_socket = self._resolve_runtime_dir() / "bus"
+            if bus_socket.exists():
+                env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_socket}"
+        if not env.get("XDG_CURRENT_DESKTOP", "").strip():
+            env["XDG_CURRENT_DESKTOP"] = "sway"
+        if not env.get("XDG_SESSION_TYPE", "").strip():
+            env["XDG_SESSION_TYPE"] = "wayland"
+        env["XDG_DATA_DIRS"] = self._resolve_xdg_data_dirs(env.get("XDG_DATA_DIRS", ""))
         return env
+
+    @staticmethod
+    def _read_json_dict(path: Path) -> dict[str, Any]:
+        """Read a JSON object from path, returning an empty dict if missing or invalid."""
+        if not path.exists():
+            return {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            _LOGGER.warning("Resetting invalid JSON profile file %s: %s", path, err)
+            return {}
+        if not isinstance(loaded, dict):
+            _LOGGER.warning("Resetting non-object JSON profile file %s", path)
+            return {}
+        return loaded
+
+    @staticmethod
+    def _write_json_dict(path: Path, data: dict[str, Any]) -> None:
+        """Write JSON object cleanly to path."""
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _prepare_media_profile(self, media_profile_dir: Path) -> None:
+        """Prepare isolated Brave media profile without crash bubbles, popups, or stale locks."""
+        default_dir = media_profile_dir / "Default"
+        default_dir.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(default_dir / "Sessions", ignore_errors=True)
+
+        for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            lock_path = media_profile_dir / lock_name
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError as err:
+                _LOGGER.warning("Failed removing stale lock %s: %s", lock_path, err)
+
+        prefs_path = default_dir / "Preferences"
+        prefs = self._read_json_dict(prefs_path)
+        profile = prefs.get("profile")
+        if not isinstance(profile, dict):
+            profile = {}
+            prefs["profile"] = profile
+        profile["exit_type"] = "Normal"
+        profile["exited_cleanly"] = True
+        content_settings = profile.get("default_content_setting_values")
+        if not isinstance(content_settings, dict):
+            content_settings = {}
+            profile["default_content_setting_values"] = content_settings
+        content_settings["popups"] = 2
+        self._write_json_dict(prefs_path, prefs)
+
+        local_state_path = media_profile_dir / "Local State"
+        local_state = self._read_json_dict(local_state_path)
+        brave = local_state.get("brave")
+        if not isinstance(brave, dict):
+            brave = {}
+            local_state["brave"] = brave
+        brave["widevine_opted_in"] = True
+        self._write_json_dict(local_state_path, local_state)
 
     def _swaymsg(self, *args: str) -> None:
         try:
@@ -188,11 +321,74 @@ class SwayCompositorBackend:
                 timeout=2.0,
                 env=self._build_env(),
             )
-        except OSError as err:
+        except (OSError, subprocess.SubprocessError) as err:
             _LOGGER.warning("swaymsg failed: %s", err)
 
+    def _get_tree(self) -> dict[str, Any] | None:
+        """Fetch and parse Sway IPC layout tree, or return None if unavailable."""
+        try:
+            res = subprocess.run(
+                ["swaymsg", "-t", "get_tree", "-r"],
+                check=False,
+                capture_output=True,
+                timeout=2.0,
+                env=self._build_env(),
+            )
+        except (OSError, subprocess.SubprocessError) as err:
+            _LOGGER.debug("swaymsg get_tree unavailable: %s", err)
+            return None
+        if res.returncode != 0:
+            return None
+        raw_stdout: object = res.stdout
+        if isinstance(raw_stdout, bytes):
+            raw_text = raw_stdout.decode("utf-8", errors="replace")
+        elif isinstance(raw_stdout, str):
+            raw_text = raw_stdout
+        else:
+            return None
+        if not raw_text.strip():
+            return None
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError as err:
+            _LOGGER.debug("Invalid JSON from swaymsg get_tree: %s", err)
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def workspace_has_windows(self, workspace: str) -> bool | None:
+        """Return True if workspace has windows, False if empty, or None if unavailable."""
+        tree = self._get_tree()
+        if tree is None:
+            return None
+        for ws in _iter_workspace_nodes(tree):
+            if ws.get("name") == workspace:
+                return _node_has_windows(ws)
+        return False
+
+    def focused_workspace(self) -> str | None:
+        """Return the currently focused Sway workspace name, or None if unavailable."""
+        tree = self._get_tree()
+        if tree is None:
+            return None
+        for ws in _iter_workspace_nodes(tree):
+            name = ws.get("name")
+            if name == "__i3_scratch" or not isinstance(name, str):
+                continue
+            if _node_is_focused(ws):
+                return name
+        return None
+
     def is_active_alive(self) -> bool:
-        return self._active_proc is not None and self._active_proc.poll() is None
+        if self._active_proc is None or self._active_proc.poll() is not None:
+            return False
+        if (
+            self._launch_started_at is not None
+            and (time.monotonic() - self._launch_started_at) > 5.0
+            and self.workspace_has_windows("2:media") is False
+        ):
+            self.close_media_workspace()
+            return False
+        return True
 
     def launch_tile(
         self,
@@ -200,24 +396,35 @@ class SwayCompositorBackend:
         browser_bin: str,
         on_exit: Callable[[], None] | None = None,
     ) -> None:
-        self.focus_workspace("2:media")
+        target = tile.target.strip()
+        if not target:
+            raise ValueError(f"Empty target for media tile '{tile.id}'")
+
+        if self._active_proc is not None or self.workspace_has_windows("2:media") is True:
+            self.close_media_workspace()
+
         if tile.kind == "browser_app":
             media_profile_dir = Path.home() / ".local/share/surface-assistant/media-profile"
-            media_profile_dir.mkdir(parents=True, exist_ok=True)
+            self._prepare_media_profile(media_profile_dir)
             cmd = [
                 browser_bin,
                 f"--user-data-dir={media_profile_dir}",
-                f"--app={tile.target}",
+                "--kiosk",
+                target,
                 "--class=surface-media",
                 "--ozone-platform=wayland",
                 "--touch-events=enabled",
                 "--password-store=basic",
-                "--enable-features=VaapiVideoDecoder",
-                "--start-fullscreen",
+                "--disable-features=Vulkan",
+                "--enable-features=VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks",
+                "--overscroll-history-navigation=0",
+                "--disable-pinch",
                 "--no-first-run",
+                "--noerrdialogs",
+                "--disable-session-crashed-bubble",
             ]
         else:
-            cmd = [tile.target]
+            cmd = [target]
 
         try:
             proc = subprocess.Popen(
@@ -227,11 +434,18 @@ class SwayCompositorBackend:
                 start_new_session=True,
                 env=self._build_env(),
             )
-            self._active_proc = proc
-            self._swaymsg('[workspace="2:media"]', "fullscreen", "enable")
         except OSError as err:
             _LOGGER.error("Failed launching tile %s: %s", tile.id, err)
             raise
+
+        rc = proc.poll()
+        if rc is not None and rc != 0:
+            raise RuntimeError(f"Media tile '{tile.id}' exited immediately with code {rc}")
+
+        self._active_proc = proc
+        self._active_tile_id = tile.id
+        self._launch_started_at = time.monotonic()
+        self.focus_workspace("2:media")
 
         def _watch_proc() -> None:
             wait_fn = getattr(proc, "wait", None)
@@ -239,10 +453,13 @@ class SwayCompositorBackend:
                 return
             try:
                 wait_fn()
-            except Exception:
+            except Exception as err:
+                _LOGGER.debug("Watcher stopped for tile %s: %s", tile.id, err)
                 return
             if self._active_proc is proc:
                 self._active_proc = None
+                self._active_tile_id = None
+                self._launch_started_at = None
                 if on_exit is not None:
                     on_exit()
                 self.focus_workspace("1:hub")
@@ -252,12 +469,82 @@ class SwayCompositorBackend:
     def focus_workspace(self, workspace: Literal["1:hub", "2:media"]) -> None:
         self._swaymsg("workspace", workspace)
 
+    @staticmethod
+    def _signal_proc_group(proc: subprocess.Popen[bytes], sig: signal.Signals) -> None:
+        """Send signal to the child's process group, falling back to proc.terminate/kill."""
+        pid = getattr(proc, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            try:
+                os.killpg(pid, sig)
+                return
+            except ProcessLookupError:
+                if proc.poll() is not None:
+                    return
+            except OSError:
+                pass
+        method = getattr(proc, "kill" if sig == signal.SIGKILL else "terminate", None)
+        if callable(method):
+            try:
+                method()
+            except ProcessLookupError:
+                return
+
+    @staticmethod
+    def _wait_proc(proc: subprocess.Popen[bytes], timeout: float) -> None:
+        """Wait up to timeout for proc exit, tolerating fake procs without timeout arg."""
+        wait_fn = getattr(proc, "wait", None)
+        if not callable(wait_fn):
+            return
+        accepts_timeout = False
+        try:
+            sig = inspect.signature(wait_fn)
+            accepts_timeout = "timeout" in sig.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in sig.parameters.values()
+            )
+        except (ValueError, TypeError):
+            accepts_timeout = True
+        try:
+            if accepts_timeout:
+                wait_fn(timeout=timeout)
+            else:
+                wait_fn()
+        except TypeError:
+            try:
+                wait_fn()
+            except subprocess.TimeoutExpired:
+                return
+        except subprocess.TimeoutExpired:
+            return
+
     def close_media_workspace(self) -> None:
         proc = self._active_proc
+        tile_id = self._active_tile_id
         self._active_proc = None
+        self._active_tile_id = None
+        self._launch_started_at = None
         self._swaymsg('[workspace="2:media"]', "kill")
         if proc is not None and proc.poll() is None:
-            proc.terminate()
+            self._signal_proc_group(proc, signal.SIGTERM)
+            self._wait_proc(proc, 2.0)
+            if proc.poll() is None:
+                self._signal_proc_group(proc, signal.SIGKILL)
+                self._wait_proc(proc, 0.5)
+        if (
+            sys.platform.startswith("linux")
+            and tile_id in ("stremio", None)
+            and shutil.which("flatpak") is not None
+        ):
+            try:
+                subprocess.run(
+                    ["flatpak", "kill", "com.stremio.Stremio"],
+                    check=False,
+                    capture_output=True,
+                    timeout=2.0,
+                    env=self._build_env(),
+                )
+            except (OSError, subprocess.SubprocessError) as err:
+                _LOGGER.debug("flatpak kill com.stremio.Stremio failed: %s", err)
 
     def pause_mpris(self) -> None:
         try:
@@ -268,7 +555,7 @@ class SwayCompositorBackend:
                 timeout=2.0,
                 env=self._build_env(),
             )
-        except OSError as err:
+        except (OSError, subprocess.SubprocessError) as err:
             _LOGGER.debug("playerctl pause unavailable: %s", err)
 
 
@@ -282,6 +569,7 @@ class MediaService:
         browser_bin: str,
         night_mode: AmbientNightModeController,
         clock: Callable[[], float] = time.monotonic,
+        on_state_change: Callable[[], None] | None = None,
     ) -> None:
         self._backend = backend
         self._tiles = {t.id: t for t in tiles}
@@ -290,6 +578,19 @@ class MediaService:
         self._clock = clock
         self._state = MediaState()
         self._sleep_deadline: float | None = None
+        self._on_state_change = on_state_change
+
+    def set_on_state_change(self, callback: Callable[[], None] | None) -> None:
+        """Register callback invoked when media state changes asynchronously."""
+        self._on_state_change = callback
+
+    def _notify_state_change(self) -> None:
+        if self._on_state_change is None:
+            return
+        try:
+            self._on_state_change()
+        except Exception:
+            _LOGGER.exception("Media state change callback failed")
 
     def _clear_inactive_session(self) -> None:
         self._state.active_tile_id = None
@@ -325,13 +626,14 @@ class MediaService:
             self._state.active_workspace = "2:media"
             self._night_mode.set_video_active(True)
         else:
-            if self._state.active_tile_id is not None and self._backend.is_active_alive():
+            if self._state.active_tile_id is not None:
                 self._backend.pause_mpris()
                 self._backend.close_media_workspace()
 
             def _on_exit() -> None:
                 if self._state.active_tile_id in (tile_id, None):
                     self._clear_inactive_session()
+                    self._notify_state_change()
 
             self._state.active_tile_id = tile_id
             self._state.active_workspace = "2:media"
@@ -350,6 +652,23 @@ class MediaService:
         self._state.active_workspace = "1:hub"
         self._night_mode.set_video_active(False)
         return self.state
+
+    def close_media(self) -> MediaState:
+        """Close the active media session, return to Hub, and clear active tile state."""
+        self._backend.pause_mpris()
+        self._backend.close_media_workspace()
+        self._backend.focus_workspace("1:hub")
+        self._clear_inactive_session()
+        return self.state
+
+    def reconcile_external_exit(self) -> bool:
+        """Clear inactive media session if the active process exited externally."""
+        if self._state.active_tile_id is not None and not self._backend.is_active_alive():
+            if self._state.active_workspace == "2:media":
+                self._backend.focus_workspace("1:hub")
+            self._clear_inactive_session()
+            return True
+        return False
 
     def set_sleep_timer(self, minutes: int) -> MediaState:
         if minutes <= 0:

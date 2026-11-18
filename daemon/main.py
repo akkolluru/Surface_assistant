@@ -178,13 +178,18 @@ async def _poll_ambient_loop(runtime: DaemonRuntime) -> None:
 async def _sleep_timer_loop(runtime: DaemonRuntime) -> None:
     while True:
         await asyncio.sleep(1.0)
+        reconciled = runtime.media.reconcile_external_exit()
         had_timer = runtime.media.state.sleep_timer_remaining_seconds is not None
         expired = runtime.media.tick_sleep_timer()
         remaining = runtime.media.state.sleep_timer_remaining_seconds
-        if expired or (
-            had_timer
-            and remaining is not None
-            and (remaining <= 10 or remaining % 15 == 0)
+        if (
+            reconciled
+            or expired
+            or (
+                had_timer
+                and remaining is not None
+                and (remaining <= 10 or remaining % 15 == 0)
+            )
         ):
             await runtime.broadcast_state()
 
@@ -224,6 +229,25 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        loop = asyncio.get_running_loop()
+        broadcast_tasks: set[asyncio.Task[None]] = set()
+
+        def _schedule_broadcast() -> None:
+            if loop.is_closed():
+                return
+            task = asyncio.create_task(rt.broadcast_state())
+            broadcast_tasks.add(task)
+            task.add_done_callback(broadcast_tasks.discard)
+
+        def _on_media_state_change() -> None:
+            if loop.is_closed():
+                return
+            try:
+                loop.call_soon_threadsafe(_schedule_broadcast)
+            except RuntimeError:
+                return
+
+        rt.media.set_on_state_change(_on_media_state_change)
         tasks: list[asyncio.Task[None]] = []
         if enable_background_tasks:
             tasks = [
@@ -236,9 +260,12 @@ def create_app(
         try:
             yield
         finally:
+            rt.media.set_on_state_change(None)
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in broadcast_tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, *broadcast_tasks, return_exceptions=True)
             await rt.knowledge.close()
 
     app = FastAPI(title="Surface Assistant Daemon", version="1.0.0", lifespan=lifespan)
@@ -306,12 +333,24 @@ def create_app(
             media_state = rt.media.launch_tile(body.tile_id)
         except KeyError as err:
             raise HTTPException(status_code=404, detail=str(err)) from err
+        except (OSError, ValueError, RuntimeError) as err:
+            await rt.broadcast_state()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to launch {body.tile_id}: {err}",
+            ) from err
         await rt.broadcast_state()
         return media_state.model_dump()
 
     @app.post("/api/media/home")
     async def return_home() -> dict[str, Any]:
         media_state = rt.media.return_home()
+        await rt.broadcast_state()
+        return media_state.model_dump()
+
+    @app.post("/api/media/close")
+    async def close_media() -> dict[str, Any]:
+        media_state = rt.media.close_media()
         await rt.broadcast_state()
         return media_state.model_dump()
 
