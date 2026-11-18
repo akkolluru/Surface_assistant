@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { AmbientHubPane } from "../components/AmbientHubPane";
@@ -472,5 +472,283 @@ describe("Surface Assistant Kiosk UI", () => {
 
     expect(launchSpy).not.toHaveBeenCalled();
     expect(track.style.transform).toBe("translate3d(calc(-100vw + 0px), 0, 0)");
+  });
+
+  it("enforces dual drag thresholds, zero-jump engagement, and rotating bezel tick marks", () => {
+    vi.stubGlobal("PointerEvent", FakePointerEvent);
+    const onLaunch = vi.fn();
+
+    const { container } = render(
+      <MediaLauncher
+        tiles={DEFAULT_DAEMON_SNAPSHOT.tiles}
+        activeTileId={null}
+        onLaunchTile={onLaunch}
+        onNavigateHub={vi.fn()}
+      />
+    );
+
+    const scrubPath = container.querySelector("path[data-dial-ring]");
+    expect(scrubPath).not.toBeNull();
+    const scrubSvg = scrubPath!.closest("svg");
+    expect(scrubSvg).not.toBeNull();
+    const bezelTicksGroup = Array.from(scrubSvg!.querySelectorAll("g")).find(
+      (g) => g.querySelectorAll("line").length > 5
+    );
+    expect(bezelTicksGroup).toBeDefined();
+
+    const youtubeBtn = screen.getByRole("button", { name: "Launch YouTube" });
+
+    // 18px noisy tap on centered medallion (< 22px button threshold) does not engage dial and launches
+    fireEvent.pointerDown(youtubeBtn, { pointerId: 1, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(youtubeBtn, { pointerId: 1, clientX: 315, clientY: 310 });
+    expect(bezelTicksGroup!.getAttribute("transform") ?? "rotate(0.000)").toBe("rotate(0.000)");
+    fireEvent.pointerUp(youtubeBtn, { pointerId: 1, clientX: 315, clientY: 310 });
+    fireEvent.click(youtubeBtn);
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    expect(onLaunch).toHaveBeenCalledWith("youtube");
+
+    // First pointermove crossing 22px button threshold (23px) engages with < 1° rotation (zero snap jump)
+    onLaunch.mockClear();
+    fireEvent.pointerDown(youtubeBtn, { pointerId: 2, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(youtubeBtn, { pointerId: 2, clientX: 277, clientY: 300 });
+    const buttonEngageTransform = bezelTicksGroup!.getAttribute("transform") ?? "";
+    const engageMatch = /rotate\((-?\d+(?:\.\d+)?)\)/.exec(buttonEngageTransform);
+    expect(engageMatch).not.toBeNull();
+    expect(Math.abs(Number(engageMatch![1]))).toBeLessThan(1);
+    expect(screen.getByRole("heading", { level: 2, name: "YouTube" })).toBeInTheDocument();
+    fireEvent.pointerUp(youtubeBtn, { pointerId: 2, clientX: 277, clientY: 300 });
+    const suppressedClick = fireEvent.click(youtubeBtn);
+    expect(suppressedClick).toBe(false);
+    expect(onLaunch).not.toHaveBeenCalled();
+
+    // 14px scrub drag on empty track crosses the 6px track threshold and rotates bezel ticks smoothly
+    fireEvent.pointerDown(scrubPath!, { pointerId: 3, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(scrubPath!, { pointerId: 3, clientX: 286, clientY: 300 });
+    const scrubTransform = bezelTicksGroup!.getAttribute("transform") ?? "";
+    expect(scrubTransform).toMatch(/^rotate\(-?\d+\.\d+\)$/);
+    expect(scrubTransform).not.toBe("rotate(0.000)");
+    expect(screen.getByRole("heading", { level: 2, name: "YouTube" })).toBeInTheDocument();
+    fireEvent.pointerUp(scrubPath!, { pointerId: 3, clientX: 286, clientY: 300 });
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("coasts across multiple slots on a brisk flick and brakes cleanly on touch without launching", () => {
+    vi.stubGlobal("PointerEvent", FakePointerEvent);
+
+    let nowMs = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+
+    let nextRafId = 1;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      const id = nextRafId;
+      nextRafId += 1;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const stepFrame = (deltaMs = 16) => {
+      nowMs += deltaMs;
+      const entries = Array.from(rafCallbacks.entries());
+      rafCallbacks.clear();
+      for (const [, cb] of entries) {
+        cb(nowMs);
+      }
+    };
+
+    const onLaunch = vi.fn();
+    const { container } = render(
+      <MediaLauncher
+        tiles={DEFAULT_DAEMON_SNAPSHOT.tiles}
+        activeTileId={null}
+        onLaunchTile={onLaunch}
+        onNavigateHub={vi.fn()}
+      />
+    );
+
+    const scrubPath = container.querySelector("path[data-dial-ring]");
+    expect(scrubPath).not.toBeNull();
+
+    // Brisk flick (~220px left over 45ms) launches coasting inertia across >= 2 slots
+    fireEvent.pointerDown(scrubPath!, { pointerId: 1, clientX: 300, clientY: 300 });
+    nowMs = 1015;
+    fireEvent.pointerMove(scrubPath!, { pointerId: 1, clientX: 240, clientY: 300 });
+    nowMs = 1030;
+    fireEvent.pointerMove(scrubPath!, { pointerId: 1, clientX: 160, clientY: 300 });
+    nowMs = 1045;
+    fireEvent.pointerMove(scrubPath!, { pointerId: 1, clientX: 80, clientY: 300 });
+    nowMs = 1050;
+    fireEvent.pointerUp(scrubPath!, { pointerId: 1, clientX: 80, clientY: 300 });
+
+    const seenHeadings = new Set<string>();
+    for (let i = 0; i < 60 && rafCallbacks.size > 0; i += 1) {
+      act(() => {
+        stepFrame(16);
+      });
+      const h = screen.getByRole("heading", { level: 2 }).textContent;
+      if (h) seenHeadings.add(h);
+    }
+
+    expect(rafCallbacks.size).toBe(0);
+    expect(seenHeadings.size).toBeGreaterThanOrEqual(2);
+    const coastSettledLabel = screen.getByRole("heading", { level: 2 }).textContent ?? "";
+    expect(["Prime Video", "Anime", "Stremio"]).toContain(coastSettledLabel);
+
+    // Second brisk flick followed by mid-coast touch-to-brake on an orbital button
+    nowMs = 2000;
+    fireEvent.pointerDown(scrubPath!, { pointerId: 2, clientX: 300, clientY: 300 });
+    nowMs = 2015;
+    fireEvent.pointerMove(scrubPath!, { pointerId: 2, clientX: 240, clientY: 300 });
+    nowMs = 2030;
+    fireEvent.pointerMove(scrubPath!, { pointerId: 2, clientX: 160, clientY: 300 });
+    nowMs = 2045;
+    fireEvent.pointerMove(scrubPath!, { pointerId: 2, clientX: 80, clientY: 300 });
+    nowMs = 2050;
+    fireEvent.pointerUp(scrubPath!, { pointerId: 2, clientX: 80, clientY: 300 });
+
+    // Advance 3 coast frames so dial is actively spinning mid-coast
+    for (let i = 0; i < 3; i += 1) {
+      act(() => {
+        stepFrame(16);
+      });
+    }
+    expect(rafCallbacks.size).toBeGreaterThan(0);
+
+    // Catch spinning dial with a stationary tap on a medallion -> brakes cleanly without launching
+    const activeMedallion = screen
+      .getByRole("group", { name: "Media service dial" })
+      .querySelector("button[tabindex='0']");
+    expect(activeMedallion).not.toBeNull();
+    fireEvent.pointerDown(activeMedallion!, { pointerId: 3, clientX: 300, clientY: 300 });
+    fireEvent.pointerUp(activeMedallion!, { pointerId: 3, clientX: 300, clientY: 300 });
+    const brakeClickAllowed = fireEvent.click(activeMedallion!);
+
+    expect(brakeClickAllowed).toBe(false);
+    expect(onLaunch).not.toHaveBeenCalled();
+
+    // Finish settling spring after brake
+    for (let i = 0; i < 45 && rafCallbacks.size > 0; i += 1) {
+      act(() => {
+        stepFrame(16);
+      });
+    }
+    expect(rafCallbacks.size).toBe(0);
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("keeps audio silent on mount and external activeTileId updates, unlocking only on user gestures", () => {
+    const tracker: Array<{
+      resume: ReturnType<typeof vi.fn>;
+      createBufferSource: ReturnType<typeof vi.fn>;
+      createOscillator: ReturnType<typeof vi.fn>;
+    }> = [];
+
+    class MockAudioParam {
+      setValueAtTime = vi.fn();
+      exponentialRampToValueAtTime = vi.fn();
+    }
+
+    class MockAudioNode {
+      connect = vi.fn();
+      start = vi.fn();
+      stop = vi.fn();
+      buffer: AudioBuffer | null = null;
+      type = "";
+      frequency = new MockAudioParam();
+      Q = new MockAudioParam();
+      gain = new MockAudioParam();
+    }
+
+    class StubAudioContext {
+      state: AudioContextState = "suspended";
+      sampleRate = 48000;
+      currentTime = 0;
+      destination = {} as AudioDestinationNode;
+      createBuffer = vi.fn((_c: number, len: number) => ({
+        getChannelData: () => new Float32Array(len),
+      }));
+      createBufferSource = vi.fn(() => new MockAudioNode());
+      createBiquadFilter = vi.fn(() => new MockAudioNode());
+      createGain = vi.fn(() => new MockAudioNode());
+      createOscillator = vi.fn(() => new MockAudioNode());
+      resume = vi.fn(() => {
+        this.state = "running";
+        return Promise.resolve();
+      });
+      close = vi.fn(() => Promise.resolve());
+
+      constructor() {
+        tracker.push(this);
+      }
+    }
+
+    vi.stubGlobal("AudioContext", StubAudioContext);
+
+    let nowMs = 500;
+    vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+
+    let nextRafId = 1;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      const id = nextRafId;
+      nextRafId += 1;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const { rerender } = render(
+      <MediaLauncher
+        tiles={DEFAULT_DAEMON_SNAPSHOT.tiles}
+        activeTileId={null}
+        onLaunchTile={vi.fn()}
+        onNavigateHub={vi.fn()}
+      />
+    );
+
+    // Mount must create zero audio contexts or sound nodes
+    expect(tracker).toHaveLength(0);
+
+    // External WebSocket activeTileId change must stay completely silent
+    rerender(
+      <MediaLauncher
+        tiles={DEFAULT_DAEMON_SNAPSHOT.tiles}
+        activeTileId="prime"
+        onLaunchTile={vi.fn()}
+        onNavigateHub={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "Prime Video" })).toBeInTheDocument();
+    act(() => {
+      for (let i = 0; i < 40 && rafCallbacks.size > 0; i += 1) {
+        nowMs += 16;
+        const entries = Array.from(rafCallbacks.entries());
+        rafCallbacks.clear();
+        for (const [, cb] of entries) cb(nowMs);
+      }
+    });
+    expect(tracker).toHaveLength(0);
+
+    // User stepping via '>' unlocks AudioContext and synthesizes detent cues cleanly
+    fireEvent.click(screen.getByRole("button", { name: "Next media service" }));
+    expect(tracker).toHaveLength(1);
+    expect(tracker[0]!.resume).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      for (let i = 0; i < 40 && rafCallbacks.size > 0; i += 1) {
+        nowMs += 25;
+        const entries = Array.from(rafCallbacks.entries());
+        rafCallbacks.clear();
+        for (const [, cb] of entries) cb(nowMs);
+      }
+    });
+
+    expect(tracker[0]!.createBufferSource).toHaveBeenCalled();
+    expect(tracker[0]!.createOscillator).toHaveBeenCalled();
   });
 });
