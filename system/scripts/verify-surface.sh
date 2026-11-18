@@ -132,8 +132,15 @@ else
   fail "brave-browser not found in PATH"
 fi
 
-if command -v stremio >/dev/null 2>&1; then
-  pass "stremio installed ($(command -v stremio))"
+if stremio_bin="$(command -v stremio 2>/dev/null)"; then
+  pass "stremio installed (${stremio_bin})"
+  if [[ "${stremio_bin}" == *flatpak* ]] || grep -Iq "flatpak" "${stremio_bin}" 2>/dev/null; then
+    if command -v flatpak >/dev/null 2>&1 && flatpak info com.stremio.Stremio >/dev/null 2>&1; then
+      pass "Stremio Flatpak installed (com.stremio.Stremio)"
+    else
+      fail "stremio uses Flatpak, but 'flatpak info com.stremio.Stremio' failed"
+    fi
+  fi
 else
   fail "stremio not found in PATH"
 fi
@@ -158,6 +165,15 @@ else
 fi
 
 # 9. Sway Kiosk session, touchscreen & Brave window
+kiosk_runner="${HOME}/.local/share/surface-assistant/scripts/run-kiosk-browser.sh"
+if [[ -x "${kiosk_runner}" ]]; then
+  pass "Kiosk browser launcher installed and executable (${kiosk_runner})"
+elif [[ -e "${kiosk_runner}" ]]; then
+  warn "Kiosk browser launcher exists at ${kiosk_runner} but is not executable (run ./scripts/deploy-surface.sh --sync-system)"
+else
+  warn "Kiosk browser launcher missing at ${kiosk_runner} (run ./scripts/deploy-surface.sh --sync-system)"
+fi
+
 shopt -s nullglob
 sway_socks=("${XDG_RUNTIME_DIR}"/sway-ipc.*.sock)
 shopt -u nullglob
