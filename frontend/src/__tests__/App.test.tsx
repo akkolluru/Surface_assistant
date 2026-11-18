@@ -110,6 +110,35 @@ describe("Surface Assistant Kiosk UI", () => {
     expect(onLaunch).toHaveBeenCalledWith("youtube");
   });
 
+  it("previews services on the upper Bedside Theater stage via switcher pills and launches via stage CTA", () => {
+    const onLaunch = vi.fn();
+    render(
+      <MediaLauncher
+        tiles={DEFAULT_DAEMON_SNAPSHOT.tiles}
+        activeTileId={null}
+        onLaunchTile={onLaunch}
+        onNavigateHub={vi.fn()}
+      />
+    );
+
+    // Initially spotlights Channel 1 (YouTube)
+    expect(screen.getByText("On Stage · YouTube")).toBeInTheDocument();
+
+    // Tap Spotlight channel 4 (Anime) in the lower switcher bar
+    const channel4Btn = screen.getByRole("button", { name: /Spotlight channel 4/i });
+    fireEvent.click(channel4Btn);
+
+    expect(channel4Btn).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("On Stage · Anime")).toBeInTheDocument();
+    expect(screen.getByText("Frieren: Beyond Journey's End")).toBeInTheDocument();
+    expect(onLaunch).not.toHaveBeenCalled();
+
+    // Tap the primary stage CTA button to launch the spotlighted service
+    fireEvent.click(screen.getByRole("button", { name: /Open spotlighted stage service/i }));
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    expect(onLaunch).toHaveBeenCalledWith("anime");
+  });
+
   it("calls Home Assistant service helper from SmartHomePane", () => {
     const callService = vi.fn();
     render(
