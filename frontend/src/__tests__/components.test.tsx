@@ -316,11 +316,169 @@ describe("Frontend Component QA Suite", () => {
   });
 
   describe("SmartHomePane", () => {
-    it("triggers scenes, lighting slider/toggles, clamped climate bounds, HVAC modes, and smart plugs", () => {
+    const withHaStates = (overrides: Record<string, string>) => {
+      const next = { ...PLACEHOLDER_HA_ENTITIES };
+      for (const [entityId, state] of Object.entries(overrides)) {
+        const base = next[entityId];
+        if (base) {
+          next[entityId] = { ...base, state };
+        }
+      }
+      return next;
+    };
+
+    it("renders HA Live vs HA Preview status and all four upper ambient stage states", () => {
+      const { rerender } = render(
+        <SmartHomePane
+          entities={PLACEHOLDER_HA_ENTITIES}
+          haConnected={true}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+
+      // 1. All Off + HA Live -> pure black stage, All Quiet, mounted halos at opacity-0
+      expect(screen.getByText("HA Live")).toBeInTheDocument();
+      expect(screen.getByText("All Quiet")).toBeInTheDocument();
+      expect(screen.getByText("Bedroom resting")).toBeInTheDocument();
+      expect(screen.getByTestId("ambient-horizon-glow")).toBeInTheDocument();
+      expect(screen.getByTestId("ambient-horizon-amber")).toHaveClass("opacity-0");
+      expect(screen.getByTestId("ambient-horizon-sky")).toHaveClass("opacity-0");
+
+      // 1b. Outlets Active (while Lights & AC remain off) -> HA Preview + active plug names
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.desk_plug": "on",
+          })}
+          haConnected={false}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("HA Preview")).toBeInTheDocument();
+      expect(screen.getByText("Outlets Active")).toBeInTheDocument();
+      expect(screen.getByText("Desk Plug", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByTestId("ambient-horizon-amber")).toHaveClass("opacity-0");
+      expect(screen.getByTestId("ambient-horizon-sky")).toHaveClass("opacity-0");
+
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.desk_plug": "on",
+            "input_boolean.fan_plug": "on",
+          })}
+          haConnected={false}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("Desk Plug · Standing Fan")).toBeInTheDocument();
+
+      // 2. Lights Only (Lamp only -> Warm; Ceiling only -> %; Ceiling + Lamp -> Ceiling · Lamp)
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedside_lamp": "on",
+          })}
+          haConnected={true}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("Warm")).toBeInTheDocument();
+      expect(screen.getByText("Bedside Lamp", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByTestId("ambient-horizon-amber")).toHaveClass("opacity-100");
+      expect(screen.getByTestId("ambient-horizon-amber").style.background).toContain(
+        "251, 191, 36"
+      );
+      expect(screen.getByTestId("ambient-horizon-sky")).toHaveClass("opacity-0");
+
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_number.bedroom_light_brightness": "75",
+          })}
+          haConnected={true}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("75%", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByText("Ceiling", { selector: "p" })).toBeInTheDocument();
+
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_boolean.bedside_lamp": "on",
+            "input_number.bedroom_light_brightness": "80",
+          })}
+          haConnected={true}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("80%", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByText("Ceiling · Lamp")).toBeInTheDocument();
+
+      // 3. AC Only -> Cool sky ring & horizon glow, amber smoothly fades to opacity-0
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_ac_power": "on",
+            "input_number.bedroom_ac_temp": "22",
+            "input_select.bedroom_ac_mode": "Dry",
+          })}
+          haConnected={true}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("22°C", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByText("AC · Dry")).toBeInTheDocument();
+      expect(screen.getByTestId("ambient-horizon-amber")).toHaveClass("opacity-0");
+      expect(screen.getByTestId("ambient-horizon-sky")).toHaveClass("opacity-100");
+      expect(screen.getByTestId("ambient-horizon-sky").style.background).toContain("56, 189, 248");
+
+      // 4. Lights + AC coexistence -> open typographic pair, blended horizon wash, no outlet sub-pill
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_boolean.bedside_lamp": "on",
+            "input_number.bedroom_light_brightness": "70",
+            "input_boolean.bedroom_ac_power": "on",
+            "input_number.bedroom_ac_temp": "21",
+            "input_select.bedroom_ac_mode": "Eco",
+            "input_boolean.desk_plug": "on",
+          })}
+          haConnected={true}
+          onCallService={vi.fn()}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByText("70%", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByText("Ceiling · Lamp")).toBeInTheDocument();
+      expect(screen.getByText("21°C", { selector: "p" })).toBeInTheDocument();
+      expect(screen.getByText("AC · Eco")).toBeInTheDocument();
+      expect(screen.queryByText("Outlets Active")).not.toBeInTheDocument();
+      expect(screen.queryByText("All Quiet")).not.toBeInTheDocument();
+      expect(screen.getByTestId("ambient-horizon-amber")).toHaveClass("opacity-100");
+      expect(screen.getByTestId("ambient-horizon-amber").style.background).toContain(
+        "251, 191, 36"
+      );
+      expect(screen.getByTestId("ambient-horizon-sky")).toHaveClass("opacity-100");
+      expect(screen.getByTestId("ambient-horizon-sky").style.background).toContain("56, 189, 248");
+    });
+
+    it("triggers scenes with 1500ms pulse, resets timer on re-tap, cleans up on unmount, and navigates to Hub", () => {
+      vi.useFakeTimers();
       const onCallService = vi.fn();
       const onNavigateHub = vi.fn();
 
-      const { rerender } = render(
+      const { unmount } = render(
         <SmartHomePane
           entities={PLACEHOLDER_HA_ENTITIES}
           haConnected={true}
@@ -329,118 +487,394 @@ describe("Frontend Component QA Suite", () => {
         />
       );
 
-      expect(screen.getByText("Home Assistant Live")).toBeInTheDocument();
+      expect(screen.queryByText("Scenes")).not.toBeInTheDocument();
 
-      // Scenes
-      fireEvent.click(screen.getByRole("button", { name: "Relax" }));
+      const relaxBtn = screen.getByRole("button", { name: "Relax" });
+      const movieBtn = screen.getByRole("button", { name: "Movie" });
+      const goodnightBtn = screen.getByRole("button", { name: "Goodnight" });
+
+      fireEvent.click(relaxBtn);
       expect(onCallService).toHaveBeenCalledWith("scene", "turn_on", {
         entity_id: "scene.evening_relax",
       });
-      fireEvent.click(screen.getByRole("button", { name: "Movie" }));
+      expect(relaxBtn).toHaveClass("scene-pulse");
+
+      // Re-tapping another scene after 1000ms cancels the previous timer and starts a fresh 1500ms pulse
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      fireEvent.click(movieBtn);
       expect(onCallService).toHaveBeenCalledWith("scene", "turn_on", {
         entity_id: "scene.movie_night",
       });
-      fireEvent.click(screen.getByRole("button", { name: "Goodnight" }));
+      expect(relaxBtn).not.toHaveClass("scene-pulse");
+      expect(movieBtn).toHaveClass("scene-pulse");
+
+      act(() => {
+        vi.advanceTimersByTime(1_499);
+      });
+      expect(movieBtn).toHaveClass("scene-pulse");
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(movieBtn).not.toHaveClass("scene-pulse");
+
+      // Trigger Goodnight and verify Hub navigation
+      fireEvent.click(goodnightBtn);
       expect(onCallService).toHaveBeenCalledWith("scene", "turn_on", {
         entity_id: "scene.goodnight",
       });
+      expect(goodnightBtn).toHaveClass("scene-pulse");
 
-      // Lighting brightness slider & ceiling light toggle
-      const brightnessSlider = screen.getByRole("slider", { name: /Ceiling Brightness/i });
+      fireEvent.click(screen.getByRole("button", { name: "Hub" }));
+      expect(onNavigateHub).toHaveBeenCalledTimes(1);
+
+      // Unmount clears pending 1500ms scene pulse timeout
+      const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+      unmount();
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+    });
+
+    it("controls lighting toggles, muted/warm brightness slider vars, AC mode cycling, clamped temp bounds, and smart plugs", () => {
+      const onCallService = vi.fn();
+
+      const { rerender } = render(
+        <SmartHomePane
+          entities={PLACEHOLDER_HA_ENTITIES}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+
+      // Lighting toggles & Brightness slider (muted slate CSS vars when Ceiling is off)
+      const ceilingBtn = screen.getByRole("button", { name: "Ceiling" });
+      const lampBtn = screen.getByRole("button", { name: "Bedside Lamp" });
+      expect(ceilingBtn).toHaveAttribute("aria-pressed", "false");
+      expect(lampBtn).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(ceilingBtn);
+      expect(onCallService).toHaveBeenCalledWith("input_boolean", "toggle", {
+        entity_id: "input_boolean.bedroom_main_light",
+      });
+      fireEvent.click(lampBtn);
+      expect(onCallService).toHaveBeenCalledWith("input_boolean", "toggle", {
+        entity_id: "input_boolean.bedside_lamp",
+      });
+
+      const brightnessSlider = screen.getByRole("slider", { name: "Brightness" });
+      expect(brightnessSlider).toHaveClass("hub-range");
+      expect(brightnessSlider).toHaveAttribute("aria-valuetext", "60%");
+      expect(brightnessSlider.style.getPropertyValue("--slider-fill-color")).toBe("#94a3b8");
+
       fireEvent.change(brightnessSlider, { target: { value: "85" } });
       expect(onCallService).toHaveBeenCalledWith("input_number", "set_value", {
         entity_id: "input_number.bedroom_light_brightness",
         value: 85,
       });
 
-      const lightingCard = screen.getByRole("heading", { name: "Bedroom Lighting" }).closest("article")!;
-      fireEvent.click(within(lightingCard).getByRole("button", { name: "Off" }));
-      expect(onCallService).toHaveBeenCalledWith("input_boolean", "toggle", {
-        entity_id: "input_boolean.bedroom_main_light",
-      });
+      // Warm amber CSS vars when Ceiling is on
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_number.bedroom_light_brightness": "85",
+          })}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(screen.getByRole("button", { name: "Ceiling" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      );
+      expect(brightnessSlider).toHaveAttribute("aria-valuetext", "85%");
+      expect(brightnessSlider.style.getPropertyValue("--slider-fill-color")).toBe("#fbbf24");
 
-      // Climate power, +/- stepping, HVAC mode toggles
-      const climateCard = screen.getByRole("heading", { name: "Climate / AC" }).closest("article")!;
-      fireEvent.click(within(climateCard).getByRole("button", { name: "Off" }));
+      // AC toggle & +/- stepping from 24
+      const acBtn = screen.getByRole("button", { name: "AC" });
+      expect(acBtn).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(acBtn);
       expect(onCallService).toHaveBeenCalledWith("input_boolean", "toggle", {
         entity_id: "input_boolean.bedroom_ac_power",
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Decrease AC target temperature" }));
-      expect(onCallService).toHaveBeenCalledWith("input_number", "set_value", {
-        entity_id: "input_number.bedroom_ac_temp",
-        value: 23,
-      });
+      const decBtn = screen.getByRole("button", { name: "Decrease AC target temperature" });
+      const incBtn = screen.getByRole("button", { name: "Increase AC target temperature" });
+      expect(decBtn).toBeEnabled();
+      expect(incBtn).toBeEnabled();
 
-      fireEvent.click(screen.getByRole("button", { name: "Increase AC target temperature" }));
-      expect(onCallService).toHaveBeenCalledWith("input_number", "set_value", {
+      onCallService.mockClear();
+      fireEvent.click(incBtn);
+      fireEvent.click(incBtn);
+      expect(onCallService).toHaveBeenNthCalledWith(1, "input_number", "set_value", {
         entity_id: "input_number.bedroom_ac_temp",
         value: 25,
       });
+      expect(onCallService).toHaveBeenNthCalledWith(2, "input_number", "set_value", {
+        entity_id: "input_number.bedroom_ac_temp",
+        value: 26,
+      });
+      expect(screen.getByText("26°C")).toBeInTheDocument();
 
-      for (const mode of ["Dry", "Fan", "Eco", "Cool"] as const) {
-        fireEvent.click(screen.getByRole("button", { name: mode }));
-        expect(onCallService).toHaveBeenCalledWith("input_select", "select_option", {
+      fireEvent.click(decBtn);
+      fireEvent.click(decBtn);
+      expect(onCallService).toHaveBeenNthCalledWith(3, "input_number", "set_value", {
+        entity_id: "input_number.bedroom_ac_temp",
+        value: 25,
+      });
+      expect(onCallService).toHaveBeenNthCalledWith(4, "input_number", "set_value", {
+        entity_id: "input_number.bedroom_ac_temp",
+        value: 24,
+      });
+      expect(screen.getByText("24°C")).toBeInTheDocument();
+
+      // 1-tap AC mode cycle: Cool -> Dry -> Fan -> Eco -> Cool + fallback normalization
+      const expectedCycle = [
+        { current: "Cool", next: "Dry" },
+        { current: "Dry", next: "Fan" },
+        { current: "Fan", next: "Eco" },
+        { current: "Eco", next: "Cool" },
+      ] as const;
+
+      for (const { current, next } of expectedCycle) {
+        rerender(
+          <SmartHomePane
+            entities={withHaStates({
+              "input_boolean.bedroom_ac_power": "on",
+              "input_select.bedroom_ac_mode": current,
+            })}
+            haConnected={true}
+            onCallService={onCallService}
+            onNavigateHub={vi.fn()}
+          />
+        );
+        const modeBtn = screen.getByRole("button", {
+          name: `${current}, switch AC mode to ${next}`,
+        });
+        fireEvent.click(modeBtn);
+        expect(onCallService).toHaveBeenLastCalledWith("input_select", "select_option", {
           entity_id: "input_select.bedroom_ac_mode",
-          option: mode,
+          option: next,
         });
       }
 
+      // Unrecognized mode normalizes to Cool -> cycles to Dry
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_select.bedroom_ac_mode": "Turbo",
+          })}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Cool, switch AC mode to Dry" })
+      );
+      expect(onCallService).toHaveBeenLastCalledWith("input_select", "select_option", {
+        entity_id: "input_select.bedroom_ac_mode",
+        option: "Dry",
+      });
+
       // Smart plugs
-      fireEvent.click(screen.getByRole("button", { name: /Desk Plug/i }));
+      const deskPlugBtn = screen.getByRole("button", { name: "Desk Plug" });
+      const fanPlugBtn = screen.getByRole("button", { name: "Standing Fan" });
+      expect(deskPlugBtn).toHaveAttribute("aria-pressed", "false");
+      expect(fanPlugBtn).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(deskPlugBtn);
       expect(onCallService).toHaveBeenCalledWith("input_boolean", "toggle", {
         entity_id: "input_boolean.desk_plug",
       });
-      fireEvent.click(screen.getByRole("button", { name: /Standing Fan/i }));
+      fireEvent.click(fanPlugBtn);
       expect(onCallService).toHaveBeenCalledWith("input_boolean", "toggle", {
         entity_id: "input_boolean.fan_plug",
       });
 
-      // Lower bound clamp (18)
+      // Lower bound disabled clamp (18)
+      onCallService.mockClear();
       rerender(
         <SmartHomePane
-          entities={{
-            ...PLACEHOLDER_HA_ENTITIES,
-            "input_number.bedroom_ac_temp": {
-              ...PLACEHOLDER_HA_ENTITIES["input_number.bedroom_ac_temp"]!,
-              state: "18",
-            },
-          }}
+          entities={withHaStates({
+            "input_number.bedroom_ac_temp": "18",
+          })}
           haConnected={false}
           onCallService={onCallService}
-          onNavigateHub={onNavigateHub}
+          onNavigateHub={vi.fn()}
         />
       );
-      expect(screen.getByText(/Home Assistant Template Mode/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Decrease AC target temperature" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Increase AC target temperature" })).toBeEnabled();
       fireEvent.click(screen.getByRole("button", { name: "Decrease AC target temperature" }));
-      expect(onCallService).toHaveBeenLastCalledWith("input_number", "set_value", {
-        entity_id: "input_number.bedroom_ac_temp",
-        value: 18,
-      });
+      expect(onCallService).not.toHaveBeenCalled();
 
-      // Upper bound clamp (30)
+      // Upper bound disabled clamp (30)
       rerender(
         <SmartHomePane
-          entities={{
-            ...PLACEHOLDER_HA_ENTITIES,
-            "input_number.bedroom_ac_temp": {
-              ...PLACEHOLDER_HA_ENTITIES["input_number.bedroom_ac_temp"]!,
-              state: "30",
-            },
-          }}
+          entities={withHaStates({
+            "input_number.bedroom_ac_temp": "30",
+          })}
           haConnected={false}
           onCallService={onCallService}
-          onNavigateHub={onNavigateHub}
+          onNavigateHub={vi.fn()}
         />
       );
+      expect(screen.getByRole("button", { name: "Increase AC target temperature" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Decrease AC target temperature" })).toBeEnabled();
       fireEvent.click(screen.getByRole("button", { name: "Increase AC target temperature" }));
+      expect(onCallService).not.toHaveBeenCalled();
+    });
+
+    it("prevents slider rubber-banding on stale mid-drag echoes and reconciles brightness & AC timers cleanly", () => {
+      vi.useFakeTimers();
+      const onCallService = vi.fn();
+
+      const { rerender, unmount } = render(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_number.bedroom_light_brightness": "60",
+            "input_boolean.bedroom_ac_power": "on",
+            "input_number.bedroom_ac_temp": "24",
+          })}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+
+      const brightnessSlider = screen.getByRole("slider", { name: "Brightness" });
+
+      // 1. Mid-drag stale HA echoes do not rubber-band thumb or --slider-progress
+      fireEvent.pointerDown(brightnessSlider);
+      fireEvent.change(brightnessSlider, { target: { value: "80" } });
+      expect(onCallService).toHaveBeenCalledWith("input_number", "set_value", {
+        entity_id: "input_number.bedroom_light_brightness",
+        value: 80,
+      });
+      expect(brightnessSlider).toHaveValue("80");
+      expect(brightnessSlider).toHaveAttribute("aria-valuetext", "80%");
+      expect(brightnessSlider.style.getPropertyValue("--slider-progress")).toBe("78.95%");
+      expect(screen.getByText("80%", { selector: "p" })).toBeInTheDocument();
+
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_number.bedroom_light_brightness": "65",
+            "input_boolean.bedroom_ac_power": "on",
+            "input_number.bedroom_ac_temp": "24",
+          })}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(brightnessSlider).toHaveValue("80");
+      expect(brightnessSlider).toHaveAttribute("aria-valuetext", "80%");
+      expect(brightnessSlider.style.getPropertyValue("--slider-progress")).toBe("78.95%");
+      expect(screen.getByText("80%", { selector: "p" })).toBeInTheDocument();
+
+      // Release starts 900ms fallback reconciliation if HA ignores update
+      fireEvent.pointerUp(brightnessSlider);
+      act(() => {
+        vi.advanceTimersByTime(899);
+      });
+      expect(brightnessSlider).toHaveValue("80");
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(brightnessSlider).toHaveValue("65");
+      expect(brightnessSlider).toHaveAttribute("aria-valuetext", "65%");
+
+      // 2. Rapid throttled drag flushes final value on release and reconciles on HA echo
+      onCallService.mockClear();
+      fireEvent.pointerDown(brightnessSlider);
+      fireEvent.change(brightnessSlider, { target: { value: "70" } });
+      fireEvent.change(brightnessSlider, { target: { value: "90" } });
+      fireEvent.pointerUp(brightnessSlider);
       expect(onCallService).toHaveBeenLastCalledWith("input_number", "set_value", {
-        entity_id: "input_number.bedroom_ac_temp",
-        value: 30,
+        entity_id: "input_number.bedroom_light_brightness",
+        value: 90,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Hub" }));
-      expect(onNavigateHub).toHaveBeenCalledTimes(1);
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_number.bedroom_light_brightness": "90",
+            "input_boolean.bedroom_ac_power": "on",
+            "input_number.bedroom_ac_temp": "24",
+          })}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(brightnessSlider).toHaveValue("90");
+
+      // External update after reconciliation applies immediately
+      rerender(
+        <SmartHomePane
+          entities={withHaStates({
+            "input_boolean.bedroom_main_light": "on",
+            "input_number.bedroom_light_brightness": "50",
+            "input_boolean.bedroom_ac_power": "on",
+            "input_number.bedroom_ac_temp": "24",
+          })}
+          haConnected={true}
+          onCallService={onCallService}
+          onNavigateHub={vi.fn()}
+        />
+      );
+      expect(brightnessSlider).toHaveValue("50");
+
+      // 3. Direct fireEvent.change without pointerDown still dispatches and reconciles after 900ms
+      onCallService.mockClear();
+      fireEvent.change(brightnessSlider, { target: { value: "75" } });
+      expect(onCallService).toHaveBeenCalledWith("input_number", "set_value", {
+        entity_id: "input_number.bedroom_light_brightness",
+        value: 75,
+      });
+      expect(brightnessSlider).toHaveValue("75");
+      act(() => {
+        vi.advanceTimersByTime(900);
+      });
+      expect(brightnessSlider).toHaveValue("50");
+
+      // 4. AC stepper resets 900ms timer across consecutive clicks, updates stage, and clears on unmount
+      const incBtn = screen.getByRole("button", { name: "Increase AC target temperature" });
+      const decBtn = screen.getByRole("button", { name: "Decrease AC target temperature" });
+      fireEvent.click(incBtn);
+      fireEvent.click(incBtn);
+      expect(screen.getByText("26°C", { selector: "p" })).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(899);
+      });
+      expect(screen.getByText("26°C", { selector: "p" })).toBeInTheDocument();
+
+      fireEvent.click(decBtn);
+      expect(screen.getByText("25°C", { selector: "p" })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(899);
+      });
+      expect(screen.getByText("25°C", { selector: "p" })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.getByText("24°C", { selector: "p" })).toBeInTheDocument();
+
+      // Unmount clears pending reconciliation timeouts cleanly
+      fireEvent.change(brightnessSlider, { target: { value: "85" } });
+      fireEvent.click(incBtn);
+      const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+      unmount();
+      expect(clearTimeoutSpy).toHaveBeenCalled();
     });
   });
 

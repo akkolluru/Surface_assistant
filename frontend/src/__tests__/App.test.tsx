@@ -270,7 +270,7 @@ describe("Surface Assistant Kiosk UI", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Bedside Warm Lamp/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Bedside Lamp/i }));
     expect(callService).toHaveBeenCalledWith("input_boolean", "toggle", {
       entity_id: "input_boolean.bedside_lamp",
     });
