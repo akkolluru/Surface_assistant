@@ -59,7 +59,7 @@ exec systemctl --user import-environment DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CU
 exec sh -c 'command -v dbus-update-activation-environment >/dev/null 2>&1 && dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS || true'
 exec $scripts/../pipewire-rules/init-sinks.sh
 exec swayosd-server
-exec_always sh -c 'runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; mkdir -p "$runtime"; pidfile="$runtime/surface-waybar.pid"; old_pid="$(cat "$pidfile" 2>/dev/null || true)"; echo "$$" > "$pidfile"; if [ -n "$old_pid" ] && [ "$old_pid" != "$$" ]; then kill "$old_pid" 2>/dev/null || true; fi; pkill -f "[w]aybar-home-state.sh" 2>/dev/null || true; pkill -f "[s]waymsg -t subscribe" 2>/dev/null || true; pkill -x waybar 2>/dev/null || true; cleanup() { if [ "$(cat "$pidfile" 2>/dev/null || true)" = "$$" ]; then rm -f "$pidfile"; fi; }; trap cleanup EXIT; while [ "$(cat "$pidfile" 2>/dev/null || true)" = "$$" ] && swaymsg -t get_version >/dev/null 2>&1; do waybar -c ~/.config/waybar/config.jsonc -s ~/.config/waybar/style.css || true; [ "$(cat "$pidfile" 2>/dev/null || true)" = "$$" ] && swaymsg -t get_version >/dev/null 2>&1 || break; sleep 1; done'
+exec_always $scripts/run-waybar.sh
 exec kdeconnect-indicator
 
 # Launch Brave Kiosk on Workspace 1 with native Wayland touch + isolated profile so

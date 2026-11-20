@@ -27,6 +27,7 @@ EXPECTED_SHELL_SCRIPTS = sorted(
     [
         SYSTEM_SCRIPTS_DIR / "return-home.sh",
         SYSTEM_SCRIPTS_DIR / "run-kiosk-browser.sh",
+        SYSTEM_SCRIPTS_DIR / "run-waybar.sh",
         SYSTEM_SCRIPTS_DIR / "setup-kiosk-autologin.sh",
         SYSTEM_SCRIPTS_DIR / "verify-surface.sh",
         SYSTEM_SCRIPTS_DIR / "volume-rocker.sh",
@@ -323,6 +324,7 @@ def test_sway_config_script_references_exist() -> None:
         "volume-rocker.sh",
         "volume-rocker.sh",
         "pipewire-rules/init-sinks.sh",
+        "run-waybar.sh",
         "run-kiosk-browser.sh",
     ]
     for rel_path in set(referenced):
@@ -1516,3 +1518,55 @@ def test_sync_wallpapers_help_dry_run_and_minimalistic_extract(tmp_path: Path) -
     ssh_calls = sandbox.read_calls("ssh")
     assert len(ssh_calls) == 2
     assert "/api/wallpapers/refresh" in ssh_calls[1][1]
+
+
+def test_run_waybar_writes_numeric_pidfile_respawns_and_replaces_old_instance(
+    tmp_path: Path,
+) -> None:
+    sandbox = ScriptSandbox(tmp_path)
+    install_swaymsg_shim(sandbox)
+    write_sway_state(sandbox, version_ok=True)
+    sandbox.install_recorder("pkill", exit_code=0)
+    sandbox.install_bash_shim("sleep", "exit 0")
+
+    sway_config_text = (REPO_ROOT / "system" / "sway" / "config").read_text(encoding="utf-8")
+    assert "$scripts/run-waybar.sh" in sway_config_text
+    assert "$$" not in sway_config_text
+
+    counter_file = sandbox.state_dir / "waybar_count.txt"
+    sandbox.install_python_shim(
+        "waybar",
+        f"""
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        log_path = Path(os.environ["SANDBOX_LOG_DIR"]) / "waybar.jsonl"
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({{"argv": sys.argv[1:]}}) + "\\n")
+
+        counter_path = Path({str(counter_file)!r})
+        count = int(counter_path.read_text(encoding="utf-8")) + 1 if counter_path.exists() else 1
+        counter_path.write_text(str(count), encoding="utf-8")
+
+        pidfile = Path({str(sandbox.runtime_dir / "surface-waybar.pid")!r})
+        assert pidfile.read_text(encoding="utf-8").strip().isdigit()
+
+        if count >= 2:
+            sway_state = Path({str(sandbox.state_dir / "swaymsg_state.json")!r})
+            data = json.loads(sway_state.read_text(encoding="utf-8"))
+            data["version_ok"] = False
+            sway_state.write_text(json.dumps(data), encoding="utf-8")
+        sys.exit(1 if count == 1 else 0)
+        """,
+    )
+
+    result = sandbox.run(
+        SYSTEM_SCRIPTS_DIR / "run-waybar.sh",
+        extra_env={"RESPAWN_DELAY": "0"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(sandbox.read_calls("waybar")) == 2
+    assert not (sandbox.runtime_dir / "surface-waybar.pid").exists()
+
