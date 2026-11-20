@@ -53,6 +53,26 @@ export const PLACEHOLDER_HA_ENTITIES: Record<string, SmartEntityState> = {
 
 const PLACEHOLDER_HA_TOKEN = "replace_with_long_lived_access_token";
 
+/** Deterministic offline scene targets mirroring homeassistant/scenes.yaml. */
+export const OFFLINE_SCENE_EFFECTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "scene.evening_relax": {
+    "input_boolean.bedroom_main_light": "off",
+    "input_boolean.bedside_lamp": "on",
+    "input_boolean.bedroom_ac_power": "on",
+    "input_number.bedroom_ac_temp": "24",
+  },
+  "scene.movie_night": {
+    "input_boolean.bedroom_main_light": "off",
+    "input_boolean.bedside_lamp": "off",
+    "input_boolean.bedroom_ac_power": "on",
+  },
+  "scene.goodnight": {
+    "input_boolean.bedroom_main_light": "off",
+    "input_boolean.bedside_lamp": "off",
+    "input_boolean.desk_plug": "off",
+  },
+};
+
 interface HaSocketMessage {
   id?: number;
   type: string;
@@ -123,7 +143,7 @@ export class HaClient {
         if (msg.type === "result" && Array.isArray(msg.result)) {
           const next = { ...this.entities };
           for (const item of msg.result) {
-            if (item.entity_id in next) {
+            if (Object.hasOwn(next, item.entity_id)) {
               const existing = next[item.entity_id];
               if (existing) {
                 next[item.entity_id] = {
@@ -229,7 +249,12 @@ export class HaClient {
     }
 
     // Placeholder / local Mac mode updates UI state deterministically so cards remain interactive
-    if (entityId && entityId in this.entities) {
+    if (domain === "scene" && service === "turn_on") {
+      this.applyOfflineScene(entityId);
+      return;
+    }
+
+    if (entityId && Object.hasOwn(this.entities, entityId)) {
       const current = this.entities[entityId];
       if (!current) return;
       let nextState = current.state;
@@ -250,5 +275,26 @@ export class HaClient {
       };
       this.onUpdate(this.entities, false);
     }
+  }
+
+  /** Apply deterministic offline entity transitions for known scene presets. */
+  private applyOfflineScene(sceneId: string | null): void {
+    if (!sceneId || !Object.hasOwn(OFFLINE_SCENE_EFFECTS, sceneId)) return;
+    const effects = OFFLINE_SCENE_EFFECTS[sceneId];
+    if (!effects) return;
+
+    let changed = false;
+    const next = { ...this.entities };
+    for (const [targetId, targetState] of Object.entries(effects)) {
+      if (!Object.hasOwn(next, targetId)) continue;
+      const current = next[targetId];
+      if (!current || current.state === targetState) continue;
+      next[targetId] = { ...current, state: targetState };
+      changed = true;
+    }
+
+    if (!changed) return;
+    this.entities = next;
+    this.onUpdate(this.entities, false);
   }
 }

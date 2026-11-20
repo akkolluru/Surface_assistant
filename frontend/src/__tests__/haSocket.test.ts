@@ -108,7 +108,7 @@ describe("haSocket HaClient", () => {
     }
   });
 
-  it("updates local placeholder state in offline mode for light, climate, and switch services", () => {
+  it("updates local placeholder state in offline mode for light, climate, switch, and scene services", () => {
     const updates: Array<{ entities: Record<string, SmartEntityState>; live: boolean }> = [];
     const client = new HaClient((entities, live) => {
       updates.push({ entities, live });
@@ -161,12 +161,63 @@ describe("haSocket HaClient", () => {
     });
     expect(updates.at(-1)?.entities["input_boolean.fan_plug"]?.state).toBe("on");
 
-    // Scene calls offline do not mutate placeholder entities (scene.* not in PLACEHOLDER_HA_ENTITIES)
-    const countBeforeScene = updates.length;
+    // Scene calls offline apply deterministic scene transitions from homeassistant/scenes.yaml
+    client.callService("input_boolean", "turn_on", {
+      entity_id: "input_boolean.bedroom_main_light",
+    });
+    client.callService("input_boolean", "turn_off", {
+      entity_id: "input_boolean.bedroom_ac_power",
+    });
+    const snapshotBeforeScenes = updates.at(-1)!.entities;
+
+    client.callService("scene", "turn_on", { entity_id: "scene.evening_relax" });
+    const afterRelax = updates.at(-1);
+    expect(afterRelax?.live).toBe(false);
+    expect(afterRelax?.entities["input_boolean.bedroom_main_light"]?.state).toBe("off");
+    expect(afterRelax?.entities["input_boolean.bedside_lamp"]?.state).toBe("on");
+    expect(afterRelax?.entities["input_boolean.bedroom_ac_power"]?.state).toBe("on");
+    expect(afterRelax?.entities["input_number.bedroom_ac_temp"]?.state).toBe("24");
+    expect(snapshotBeforeScenes["input_boolean.bedside_lamp"]?.state).toBe("off");
+
+    client.callService("input_boolean", "turn_on", {
+      entity_id: "input_boolean.bedroom_main_light",
+    });
+    client.callService("input_boolean", "turn_off", {
+      entity_id: "input_boolean.bedroom_ac_power",
+    });
+    client.callService("scene", "turn_on", { entity_id: "scene.movie_night" });
+    const afterMovie = updates.at(-1);
+    expect(afterMovie?.entities["input_boolean.bedroom_main_light"]?.state).toBe("off");
+    expect(afterMovie?.entities["input_boolean.bedside_lamp"]?.state).toBe("off");
+    expect(afterMovie?.entities["input_boolean.bedroom_ac_power"]?.state).toBe("on");
+
+    client.callService("input_boolean", "turn_on", {
+      entity_id: "input_boolean.bedroom_main_light",
+    });
+    client.callService("input_boolean", "turn_on", {
+      entity_id: "input_boolean.bedside_lamp",
+    });
     client.callService("scene", "turn_on", { entity_id: "scene.goodnight" });
-    expect(updates).toHaveLength(countBeforeScene);
+    const afterGoodnight = updates.at(-1);
+    expect(afterGoodnight?.entities["input_boolean.bedroom_main_light"]?.state).toBe("off");
+    expect(afterGoodnight?.entities["input_boolean.bedside_lamp"]?.state).toBe("off");
+    expect(afterGoodnight?.entities["input_boolean.desk_plug"]?.state).toBe("off");
+    expect(afterGoodnight?.entities["input_boolean.fan_plug"]?.state).toBe("on");
+
+    // Re-applying unchanged scene, unknown scene, or prototype key is a no-op
+    const countBeforeNoOps = updates.length;
+    client.callService("scene", "turn_on", { entity_id: "scene.goodnight" });
+    client.callService("scene", "turn_on", { entity_id: "scene.unknown" });
+    client.callService("scene", "turn_on", { entity_id: "toString" });
+    expect(updates).toHaveLength(countBeforeNoOps);
+
     // Original PLACEHOLDER_HA_ENTITIES remains unmutated
     expect(PLACEHOLDER_HA_ENTITIES["input_boolean.bedroom_main_light"]?.state).toBe("off");
+    expect(PLACEHOLDER_HA_ENTITIES["input_boolean.bedside_lamp"]?.state).toBe("off");
+    expect(PLACEHOLDER_HA_ENTITIES["input_boolean.bedroom_ac_power"]?.state).toBe("off");
+    expect(PLACEHOLDER_HA_ENTITIES["input_number.bedroom_ac_temp"]?.state).toBe("24");
+    expect(PLACEHOLDER_HA_ENTITIES["input_boolean.desk_plug"]?.state).toBe("off");
+    expect(afterGoodnight?.entities).not.toBe(PLACEHOLDER_HA_ENTITIES);
   });
 
   it("executes full HA WebSocket handshake, hydration, state_changed events, and callService correlation", async () => {
